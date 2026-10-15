@@ -133,7 +133,7 @@ Messages you may see:
 - "The GDScript language server on 127.0.0.1:PORT belongs to another Godot editor (project ...)". Two editors are open and only the first one got the port. Close the other one, or give this editor a different port and set `GODOT_MCP_LSP_PORT`.
 - "The headless Godot editor did not start its GDScript language server ..." The last lines of Godot's output follow the message. Often it's a project that fails to import.
 
-The first headless scene edit on a never-opened project also runs a one-time import (`godot --headless --import`), so it can take longer.
+The first headless scene edit on a never-opened project also runs a one-time import (`godot --headless --import`), so it can take longer. The same import runs again before a headless call when a `class_name` script changed since Godot last saved its global class cache (`.godot/global_script_class_cache.cfg`), so new script classes are known to headless operations.
 
 ## Timeouts
 
