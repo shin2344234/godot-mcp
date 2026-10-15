@@ -34,6 +34,7 @@ const Params := preload("../core/params.gd")
 const NodePaths := preload("../core/node_paths.gd")
 const ResPaths := preload("../core/res_paths.gd")
 const Fuzzy := preload("../core/fuzzy.gd")
+const EditorScenes := preload("../core/editor_scenes.gd")
 
 const ACTIONS: PackedStringArray = ["get_selection", "select", "open_script", "save_all", "toast"]
 ## EditorToaster.Severity values by name.
@@ -234,7 +235,8 @@ static func _save_all(env: Dictionary, ei: Object) -> Dictionary:
 	var skipped: Array = []
 	var failed: Array = []
 
-	var unsaved_scenes: PackedStringArray = ei.call(&"get_unsaved_scenes")
+	# Real tab paths (the editor's list is stale after scene.save_as, see core/editor_scenes.gd).
+	var unsaved_scenes: PackedStringArray = EditorScenes.unsaved_scenes(ei)
 	for path: String in unsaved_scenes:
 		if path.is_empty():
 			skipped.append({"scene": null, "reason": "a new scene that was never saved; save it with scene.save_as and a res:// path"})

@@ -60,7 +60,12 @@ export const runStart = defineOp({
         data: {
           ...(result as object),
           mode: 'editor',
-          note: 'Started in the editor. godot_game_* tools work on it once its runtime loads; its output shows in the editor Output panel (godot_editor_logs).',
+          // The game is its own process: its print()/errors reach the editor's Output panel
+          // over the debugger connection, not the editor process's log that
+          // godot_editor_logs reads. The old note pointed at editor_logs, where the game's
+          // prints never showed up.
+          note:
+            'Started in the editor. godot_game_* tools work on it once its runtime loads. Its print() and error output appears in the editor\'s Output panel only; godot_editor_logs does not include it (that is the editor\'s own log). To capture game output, run with mode "process" and read godot_run_output.',
         },
       };
     }
@@ -205,7 +210,9 @@ export const runOutput = defineOp({
         next: page.next,
         more: page.more,
         dropped: page.dropped,
-        lines: page.lines.map((l) => `${l.seq} ${l.level === 'info' ? '' : l.level.toUpperCase() + ' '}${l.text}`),
+        // "EVAL" marks the output of a failed godot_debug_control evaluate: Godot prints it
+        // like a game error, but it isn't one (not counted, not in errors: true).
+        lines: page.lines.map((l) => `${l.seq} ${l.evaluate ? 'EVAL ' : l.level === 'info' ? '' : l.level.toUpperCase() + ' '}${l.text}`),
       },
     };
   },
@@ -215,7 +222,8 @@ export const editorLogs = defineOp({
   name: 'editor.logs',
   group: 'editor',
   title: 'Editor log',
-  description: 'Godot editor: read messages, warnings and errors printed by the editor process (plugin and tool scripts, import errors). Page with "since".',
+  description:
+    'Godot editor: read messages, warnings and errors printed by the editor process (plugin and tool scripts, import errors; not a running game\'s prints). Repeats are merged with a count. Page with "since".',
   input: z.object({
     since: z.number().int().min(0).default(0),
     limit: z.number().int().min(1).max(2000).default(200),
@@ -224,10 +232,60 @@ export const editorLogs = defineOp({
   readOnly: true,
   idempotent: true,
   async run(args, ctx) {
-    const result = await ctx.bridge.request('logs.read', args);
+    const result = (await ctx.bridge.request('logs.read', args)) as { entries?: LogEntry[] };
+    // Collapse repeats in the page (see mergeLogEntries); paging (next/dropped) is unchanged.
+    if (Array.isArray(result.entries)) result.entries = mergeLogEntries(result.entries);
     return { data: result };
   },
 });
+
+/** One editor log entry as core/log_buffer.gd returns it. */
+export interface LogEntry {
+  seq: number;
+  level: string;
+  message: string;
+  kind?: string;
+  file?: string;
+  line?: number;
+  function?: string;
+  time?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Merges repeated entries of one editor_logs page into the first occurrence, with
+ * `count` and the `last_seq` / `last_time` of the final repeat (order otherwise kept).
+ *
+ * Why: a windowed game run from the editor under Xvfb (no window manager) makes the editor
+ * log "Unhandled XServer error: BadWindow ..." about every 150 ms, and one page held
+ * nothing else. run_output errors: true already merges repeats; this does the same here.
+ *
+ * Errors and warnings also merge when they differ only in numbers: Godot puts serial
+ * numbers, ids and counters into such messages (the BadWindow text carries three serial
+ * numbers that change every time), so exact matching would merge nothing. The first
+ * message is kept verbatim. Plain messages (print output) merge only when identical, so
+ * "score 1", "score 2" stay separate lines.
+ */
+export function mergeLogEntries(entries: LogEntry[]): LogEntry[] {
+  const out: LogEntry[] = [];
+  const byKey = new Map<string, LogEntry>();
+  for (const e of entries) {
+    const text = String(e.message ?? '');
+    const msgKey = e.level === 'info' ? text : text.replace(/\d+/g, '#');
+    const key = JSON.stringify([e.level, e.kind ?? '', e.file ?? '', e.line ?? 0, e.function ?? '', msgKey]);
+    const first = byKey.get(key);
+    if (first) {
+      first.count = Number(first.count ?? 1) + 1;
+      first.last_seq = e.seq;
+      if (e.time !== undefined) first.last_time = e.time;
+      continue;
+    }
+    const copy = { ...e };
+    byKey.set(key, copy);
+    out.push(copy);
+  }
+  return out;
+}
 
 export const editorLaunch = defineOp({
   name: 'editor.launch',

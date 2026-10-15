@@ -304,7 +304,7 @@ static func set_preset(params: Dictionary, env: Dictionary) -> Dictionary:
 	if bool(env.get("editor", false)):
 		result["editor_reloaded"] = reloaded
 	if created:
-		result["note"] = "New preset written with default fields; Godot fills in the platform's remaining options with their defaults when it loads the preset. Set export_path before exporting."
+		result["note"] = "New preset written with the platform's default options (export.presets lists them). Set export_path before exporting."
 	return R.ok(result)
 
 
@@ -340,15 +340,33 @@ static func _create_preset(cfg: ConfigFile, presets: Array, create: Dictionary) 
 	cfg.set_value(section, "encrypt_pck", false)
 	cfg.set_value(section, "encrypt_directory", false)
 	cfg.set_value(section, "script_export_mode", 2)
-	# ConfigFile cannot hold an empty section, and EditorExport::load_config prints an
-	# error for a missing [preset.N.options]; every platform has the custom template
-	# options, so they keep the section. Other options take the platform defaults when
-	# Godot loads the preset (verified: a CLI export works with only these).
-	cfg.set_value(section + ".options", "custom_template/debug", "")
-	cfg.set_value(section + ".options", "custom_template/release", "")
+	# [preset.N.options] gets every option of the platform with its default value, which
+	# is what the editor writes for a new preset (EditorExportPlatform::create_preset fills
+	# values from get_export_options; EditorExport::_save writes them all). No script API
+	# exposes a platform's options outside the editor, so they come from export_defaults.cfg,
+	# generated from the editor by scripts/gen-export-defaults.sh. Without that file only the
+	# custom template options (which every platform has) are written: ConfigFile cannot hold
+	# an empty section, and Godot fills in the rest with defaults when it loads the preset.
+	var defaults: ConfigFile = _platform_defaults()
+	if defaults != null and defaults.has_section(platform):
+		for key: String in defaults.get_section_keys(platform):
+			cfg.set_value(section + ".options", key, defaults.get_value(platform, key))
+	else:
+		cfg.set_value(section + ".options", "custom_template/debug", "")
+		cfg.set_value(section + ".options", "custom_template/release", "")
 	var entry: Dictionary = {"index": index, "section": section, "name": name, "platform": platform}
 	presets.append(entry)
 	return R.value(entry)
+
+
+## core/export_defaults.cfg: platform name -> every export option and its default (see
+## scripts/gen-export-defaults.sh). Loaded on demand; null if the file is missing.
+static func _platform_defaults() -> ConfigFile:
+	var file: String = (R as Script).resource_path.get_base_dir().path_join("export_defaults.cfg")
+	var cf := ConfigFile.new()
+	if cf.load(file) != OK:
+		return null
+	return cf
 
 
 ## Sets a [preset.N] field, with the checks and side tables the editor applies.

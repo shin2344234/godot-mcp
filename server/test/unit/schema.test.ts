@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { compactInput, compactJsonSchema, toolJsonSchema } from '../../src/mcp/schema.js';
+import { inputEdit } from '../../src/ops/projectEdit.js';
 
 const sample = z.object({
   path: z.string().describe('Node path.'),
@@ -45,5 +46,14 @@ describe('compact tool schemas', () => {
     const bad = await std.validate({ index: 'x' });
     expect(bad.issues?.length).toBeGreaterThan(0);
     expect(std.jsonSchema.input({ target: 'draft-2020-12' })).toEqual(toolJsonSchema(sample));
+  });
+});
+
+describe('documented tool parameters', () => {
+  it('input.edit says string keys bind physical keys and how to bind by keycode', () => {
+    // MCP_TEST_LOG: "R" was stored as a physical key without the schema saying so.
+    const json = JSON.stringify(toolJsonSchema(inputEdit.input));
+    expect(json).toMatch(/physical key/);
+    expect(json).toMatch(/physical \(false: by keycode\)/);
   });
 });

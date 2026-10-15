@@ -25,6 +25,7 @@ import { mkdir, readdir, readFile, rm, rmdir, stat, writeFile } from 'node:fs/pr
 import path from 'node:path';
 import { OpError } from '../errors.js';
 import { findGodot, GODOT_NOT_FOUND_HINT } from '../godot/binary.js';
+import { importArgs } from '../godot/headless.js';
 import { log } from '../log.js';
 import type { OpContext } from '../ops/types.js';
 import { PathError, resolveProjectPathStrict } from '../project/paths.js';
@@ -396,7 +397,7 @@ export async function runTests(args: TestRunArgs, ctx: OpContext) {
     if (!(await classesImported(projectPath, info.framework))) {
       ctx.progress?.(0, undefined, 'Importing the project (first run; registers the test framework classes)');
       log.info(`test.run: importing ${projectPath} first`);
-      const imp = await spawnTracked(godot.path, ['--headless', '--path', projectPath, '--import'], {
+      const imp = await spawnTracked(godot.path, importArgs(projectPath), {
         cwd: projectPath,
         timeoutMs: IMPORT_TIMEOUT_MS,
         signal: ctx.signal,

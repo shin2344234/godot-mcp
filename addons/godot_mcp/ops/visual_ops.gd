@@ -683,6 +683,17 @@ static func plan_layout(root: Node, params: Variant) -> Dictionary:
 		var grow: Vector2i = _grow_for_preset(preset)
 		cs.do_property(ctl, &"grow_horizontal", grow.x)
 		cs.do_property(ctl, &"grow_vertical", grow.y)
+		if min_size != null:
+			# Control::set_offsets_preset sizes the rect from get_minimum_size() (the content
+			# minimum) and ignores custom_minimum_size (scene/gui/control.cpp, Godot 4.7.2).
+			# At runtime Control::_size_changed then grows the rect to the combined minimum
+			# in the grow direction, so the stored offsets no longer describe what is shown
+			# (MCP_TEST_LOG: top_right + [200, 0] reported a 65 px wide rect). Write the
+			# offsets of the rect Godot will actually show instead.
+			var fixed: Array = _offsets_with_min_size(ctl, preset, int(rm["value"]), margin, min_size, grow)
+			for i: int in 4:
+				if fixed[i] != null:
+					cs.do_property(ctl, StringName("offset_" + SIDE_NAMES[i]), fixed[i])
 	for i: int in anchor_vals.size():
 		# keep_offset = true: anchors are set as given and offsets stay as they are (in the
 		# headless runner the parent has no size, so "keep the rect" would mean nothing).
@@ -727,6 +738,50 @@ static func plan_layout(root: Node, params: Variant) -> Dictionary:
 			out["warnings"] = ["The control's size is unknown outside the editor (its anchors stretch it), so '%s' kept a size of 0. Pass offsets explicitly, use resize_mode \"minsize\" with custom_minimum_size, or run this with the editor open." % resize_name]
 		return out
 	return {"changes": cs, "finish": finish}
+
+
+## Offsets [left, top, right, bottom] after applying `preset` and growing the rect to
+## `min_size` along each axis whose anchors don't stretch it, the way Control::_size_changed
+## grows a too-small rect (GROW_DIRECTION_BEGIN moves the begin edge, END the end edge,
+## BOTH splits the difference). Entries are null where nothing changes. The preset is run
+## on the control and its anchors/offsets restored at once, because its offsets depend on
+## the parent rect that only Godot computes.
+static func _offsets_with_min_size(ctl: Control, preset: int, resize_mode: int, margin: int, min_size: Vector2, grow: Vector2i) -> Array:
+	var saved_anchors: Array[float] = []
+	var saved_offsets: Array[float] = []
+	for i: int in 4:
+		saved_anchors.append(ctl.get_anchor(i))
+		saved_offsets.append(ctl.get_offset(i))
+	ctl.set_anchors_and_offsets_preset(preset, resize_mode, margin)
+	var anchors: Array[float] = []
+	var offsets: Array[float] = []
+	for i: int in 4:
+		anchors.append(ctl.get_anchor(i))
+		offsets.append(ctl.get_offset(i))
+	for i: int in 4:
+		ctl.set_anchor(i, saved_anchors[i], true, false)
+	for i: int in 4:
+		ctl.set_offset(i, saved_offsets[i])
+	var wanted: Vector2 = min_size.max(ctl.get_minimum_size())
+	var out: Array = [null, null, null, null]
+	for axis: int in 2:
+		var b: int = axis  # SIDE_LEFT / SIDE_TOP
+		var e: int = axis + 2  # SIDE_RIGHT / SIDE_BOTTOM
+		if not is_equal_approx(anchors[b], anchors[e]):
+			continue  # stretched by its anchors: the size depends on the parent
+		var have: float = offsets[e] - offsets[b]
+		var need: float = wanted[axis]
+		if have >= need:
+			continue
+		match grow[axis]:
+			0:
+				out[b] = offsets[e] - need
+			1:
+				out[e] = offsets[b] + need
+			_:
+				out[b] = offsets[b] - (need - have) / 2.0
+				out[e] = offsets[e] + (need - have) / 2.0
+	return out
 
 
 ## Control.set_grow_direction_preset() is not exposed to scripts; same mapping as the

@@ -147,6 +147,14 @@ describe.skipIf(!enabled)('code tools: private LSP editor', () => {
     const comp = json(await call('godot_code_lookup', { path: 'res://player.gd', line: 17, symbol: 'move_and', kind: 'completion', limit: 5 }));
     expect(comp.prefix).toBe('move_and');
     expect(comp.items.map((i: { label: string }) => i.label)).toContain('move_and_slide()');
+    // No items: say why instead of an empty list (MCP_TEST_LOG).
+    const comment = json(await call('godot_code_lookup', { path: 'res://player.gd', line: 2, column: 10, kind: 'completion' }));
+    expect(comment).toMatchObject({ total: 0, items: [] });
+    expect(comment.hint).toMatch(/inside a comment/);
+    const blank = json(await call('godot_code_lookup', { path: 'res://player.gd', line: 8, column: 1, kind: 'completion' }));
+    expect(blank).toMatchObject({ total: 0, items: [] });
+    expect(blank.hint).toMatch(/script level/);
+    expect(comp.hint).toBeUndefined();
 
     const hl = json(await call('godot_code_lookup', { path: 'res://player.gd', line: 4, symbol: 'speed', kind: 'highlight' }));
     expect(hl.positions).toEqual([{ line: 4, column: 13 }, { line: 16, column: 27 }]);

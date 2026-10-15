@@ -94,10 +94,11 @@ describe.skipIf(!enabled)('resources (headless)', () => {
     const r = json(
       await call('godot_resource_set', {
         path: 'res://resources/sample_material.tres',
-        properties: { 'next_pass:albedo_color': [0, 1, 0], roughness: 0.25, 'albedo_color:a': 0.5 },
+        properties: { 'next_pass:albedo_color': [0, 1, 0], roughness: 0.25, 'albedo_color:a': 0.5, metallic: 0.3 },
       }),
     );
     expect(r.saved).toBe(true);
+    expect(r.warnings).toBeUndefined(); // metallic is float32: 0.3 reads back as 0.300000011920929
     expect(r.undoable).toBe(false);
     expect(r.changed['next_pass:albedo_color']).toBe('Color(0, 1, 0, 1)');
     const text = readFileSync(path.join(proj.dir, 'resources', 'sample_material.tres'), 'utf8');
@@ -115,6 +116,45 @@ describe.skipIf(!enabled)('resources (headless)', () => {
     const typed = errorText(await call('godot_resource_set', { path: 'res://resources/sample_material.tres', properties: { roughness: 'very' } }));
     expect(typed).toMatch(/roughness/);
   }, 60_000);
+
+  it('creates a resource of a class_name script written moments ago', async () => {
+    // MCP_TEST_LOG Phase A: the global class cache didn't know a fresh class_name, so
+    // headless resource.create answered "Unknown Resource class".
+    const w = json(await call('godot_files_write', { path: 'res://lib/floor_tile_library.gd', content: 'class_name FloorTileLibrary\nextends MeshLibrary\n\n@export var tile_size := 2.0\n' }));
+    expect(w.validation?.errors ?? []).toEqual([]);
+    const created = json(await call('godot_resource_create', { path: 'res://lib/floor.tres', type: 'FloorTileLibrary', properties: { tile_size: 3.0 } }));
+    expect(created.type).toBe('MeshLibrary');
+    const text = readFileSync(path.join(proj.dir, 'lib', 'floor.tres'), 'utf8');
+    expect(text).toContain('path="res://lib/floor_tile_library.gd"');
+    expect(text).toContain('tile_size = 3.0');
+  }, 120_000);
+
+  it('builds a MeshLibrary from dynamic item/<id>/* properties', async () => {
+    const created = json(
+      await call('godot_resource_create', {
+        path: 'res://lib/tiles.tres',
+        type: 'MeshLibrary',
+        properties: { 'item/0/name': 'Floor', 'item/0/mesh': { new: 'BoxMesh', properties: { size: [2, 0.2, 2] } }, 'item/3/name': 'Wall' },
+      }),
+    );
+    expect(created.properties_set).toEqual(['item/0/name', 'item/0/mesh', 'item/3/name']);
+    // Adding to an existing library through resource.set, plus a typo that must not create an item.
+    const set = json(await call('godot_resource_set', { path: 'res://lib/tiles.tres', properties: { 'item/1/name': 'Ramp', 'item/1/mesh_transform': 'Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0)' } }));
+    expect(set.changed['item/1/name']).toBe('Ramp');
+    const typo = errorText(await call('godot_resource_set', { path: 'res://lib/tiles.tres', properties: { 'item/7/nmae': 'X' } }));
+    expect(typo).toMatch(/has no property 'item\/7\/nmae'/);
+    const r = json(await call('godot_resource_read', { path: 'res://lib/tiles.tres' }));
+    expect(r.properties['item/0/name']).toBe('Floor');
+    expect(r.properties['item/0/mesh']).toMatchObject({ class: 'BoxMesh', embedded: true });
+    expect(r.properties['item/1/name']).toBe('Ramp');
+    expect(r.properties['item/3/name']).toBe('Wall');
+    expect(r.properties['item/7/name']).toBeUndefined();
+    // A GridMap can use it straight away.
+    json(await call('godot_scene_create', { path: 'res://lib/grid.tscn', root_type: 'Node3D' }));
+    json(await call('godot_node_add', { scene: 'res://lib/grid.tscn', parent: '.', type: 'GridMap', name: 'Grid', properties: { mesh_library: 'res://lib/tiles.tres' } }));
+    const grid = json(await call('godot_node_get', { scene: 'res://lib/grid.tscn', path: 'Grid', properties: ['mesh_library'] }));
+    expect(grid.properties.mesh_library).toMatchObject({ resource: 'res://lib/tiles.tres' });
+  }, 120_000);
 
   it('lists dependencies and dependents, resolving uids', async () => {
     const d = json(await call('godot_resource_deps', { path: 'res://resources/sample_material.tres' }));

@@ -8,12 +8,17 @@
  * rewrites the .import file and answers `reimport: "pending"`; we then run
  * `godot --headless --path <project> --import` (which imports everything
  * whose source or .import changed, then quits) and read the result back.
+ *
+ * A freshly written asset has no .import file yet. Instead of asking the user
+ * to run a shell command, both tools import it first (see withFirstImport):
+ * headless with the same `--import` run, or through the live editor with a
+ * filesystem scan (EditorFileSystem imports new files once a scan finds them).
  */
 
 import { z } from 'zod';
 import { OpError } from '../errors.js';
 import { findGodot, GODOT_NOT_FOUND_HINT } from '../godot/binary.js';
-import { runProcess } from '../godot/headless.js';
+import { importArgs, runProcess } from '../godot/headless.js';
 import { forwardOp } from './backend.js';
 import { defineOp, type OpContext, type Operation } from './types.js';
 
@@ -23,11 +28,11 @@ export const importGet = defineOp({
   name: 'import.get',
   group: 'import',
   title: 'Get import settings',
-  description: 'Godot import: show an asset\'s importer, options, uid and whether its imported files exist.',
+  description: 'Godot import: show an asset\'s importer, options, uid and whether its imported files exist (imports new assets first).',
   input: z.object({ path: asset }),
   readOnly: true,
   idempotent: true,
-  run: (args, ctx) => forwardOp(ctx, 'import.get', args),
+  run: (args, ctx) => withFirstImport(ctx, () => forwardOp(ctx, 'import.get', args)),
 });
 
 export const importSet = defineOp({
@@ -44,7 +49,7 @@ export const importSet = defineOp({
   destructive: false,
   idempotent: true,
   async run(args, ctx) {
-    const res = await forwardOp(ctx, 'import.set', args);
+    const res = await withFirstImport(ctx, () => forwardOp(ctx, 'import.set', args));
     const data = res.data as Record<string, unknown>;
     if (data.reimport !== 'pending') return res;
     // Headless: the .import file is written; run Godot's importer, then read back.
@@ -54,20 +59,64 @@ export const importSet = defineOp({
   },
 });
 
+/** How long to wait for the live editor to import a new file after a scan. */
+const EDITOR_IMPORT_WAIT_MS = 30_000;
+
+/** Is this the addon's "asset exists but was never imported" error (import_ops.gd _load_import)? */
+export function needsImport(err: unknown): boolean {
+  return err instanceof OpError && err.code === 'NOT_FOUND' && (err.data as { needs_import?: unknown } | undefined)?.needs_import === true;
+}
+
+/**
+ * Run `call`; if it fails because the asset has no .import file yet, import
+ * the project's new files and run it once more.
+ * - Live editor: a full filesystem scan (filesystem.refresh without paths).
+ *   EditorFileSystem::scan() is asynchronous and imports new files when the
+ *   scan ends (editor/file_system/editor_file_system.cpp, Godot 4.7.2), so we
+ *   poll the call until the .import file shows up.
+ * - Headless: `godot --headless --import`, the same import the editor does on
+ *   startup (it scans res://, imports new or changed assets and quits).
+ * If the asset still isn't imported afterwards (e.g. Godot has no importer
+ * for its extension), the second error goes back to the caller unchanged.
+ */
+export async function withFirstImport<T>(ctx: OpContext, call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (err) {
+    if (!needsImport(err)) throw err;
+  }
+  if (ctx.bridge.isOpen()) {
+    ctx.progress?.(0, 1, 'Asking the editor to scan and import the new file');
+    await ctx.bridge.request('filesystem.refresh', {});
+    const deadline = Date.now() + EDITOR_IMPORT_WAIT_MS;
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 500));
+      try {
+        return await call();
+      } catch (err) {
+        if (!needsImport(err) || Date.now() > deadline) throw err;
+      }
+    }
+  }
+  await reimportHeadless(ctx, 'first');
+  return call();
+}
+
 /** `godot --headless --import` on the project; throws with Godot's output on failure. */
-async function reimportHeadless(ctx: OpContext): Promise<void> {
+async function reimportHeadless(ctx: OpContext, kind: 'first' | 'reimport' = 'reimport'): Promise<void> {
   const godot = await findGodot(ctx.config.godotPath);
   if (!godot) throw new OpError('GODOT_NOT_FOUND', GODOT_NOT_FOUND_HINT);
-  ctx.progress?.(0, 1, 'Reimporting with godot --headless --import');
+  ctx.progress?.(0, 1, 'Importing with godot --headless --import');
   const timeoutMs = Math.max(ctx.config.headlessTimeoutMs, 300_000);
-  const run = await runProcess(godot.path, ['--headless', '--path', ctx.config.projectPath, '--import'], { cwd: ctx.config.projectPath, timeoutMs });
-  ctx.progress?.(1, 1, 'Reimport finished');
+  const run = await runProcess(godot.path, importArgs(ctx.config.projectPath), { cwd: ctx.config.projectPath, timeoutMs });
+  ctx.progress?.(1, 1, 'Import finished');
+  const what = kind === 'first' ? 'The asset had no .import file yet, and' : 'The .import file was updated, but';
   if (run.timedOut) {
-    throw new OpError('TIMEOUT', `The .import file was updated, but "godot --headless --import" did not finish within ${timeoutMs} ms. Open the project in the editor to finish importing.`);
+    throw new OpError('TIMEOUT', `${what} "godot --headless --import" did not finish within ${timeoutMs} ms. Open the project in the editor to finish importing.`);
   }
   if (run.code !== 0) {
     const tail = (run.stdout + '\n' + run.stderr).trim().split(/\r?\n/).slice(-15).join('\n');
-    throw new OpError('GODOT_ERROR', `The .import file was updated, but "godot --headless --import" exited with code ${run.code}. Last output:\n${tail}`);
+    throw new OpError('GODOT_ERROR', `${what} "godot --headless --import" exited with code ${run.code}. Last output:\n${tail}`);
   }
 }
 

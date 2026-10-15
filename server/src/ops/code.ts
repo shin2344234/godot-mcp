@@ -25,7 +25,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { OpError } from '../errors.js';
 import type { LspDiagnostic, LspDocumentSymbol, LspLocation, LspRange } from '../lsp/client.js';
-import { findIdentifier, GdMask, isIdentifier } from '../lsp/gdscriptText.js';
+import { completionHint, findIdentifier, GdMask, isIdentifier } from '../lsp/gdscriptText.js';
 import { lspManagerFor, type LspSession } from '../lsp/manager.js';
 import { pathToFileUri, uriToProjectRel } from '../lsp/uri.js';
 import { isInGodotCache, PathError, resolveProjectPathStrict, type ProjectPath } from '../project/paths.js';
@@ -509,6 +509,7 @@ export const codeLookup = defineOp({
             total,
             matching: items.length,
             items: items.slice(0, args.limit).map((i) => ({ label: i.label, kind: COMPLETION_KIND[i.kind ?? 0] ?? String(i.kind ?? '') })),
+            ...(items.length === 0 ? { hint: completionHint(at.text, at.line, at.character, total, items.length, prefix) } : {}),
           },
         };
       }

@@ -147,7 +147,12 @@ export const filesRead = defineOp({
     if (buf.subarray(0, 8000).includes(0)) {
       throw new OpError('BAD_PARAMS', `"${file.res}" looks binary (an image, audio or compiled file), so it can't be read as text.`);
     }
-    const lines = buf.toString('utf8').split(/\r?\n/);
+    const text = buf.toString('utf8');
+    const lines = text.split(/\r?\n/);
+    // A final newline ends the last line; it doesn't start an extra empty one. Without this
+    // a 49-line script (saved with a trailing newline, as Godot does) read as 50 lines here
+    // while godot_debug_breakpoints said "has 49 lines", which looked like an off-by-one.
+    if (lines.length > 1 && /\r?\n$/.test(text)) lines.pop();
     const slice = lines.slice(offset - 1, offset - 1 + limit);
     const width = String(offset + slice.length).length;
     const numbered = slice.map((l, i) => `${String(offset + i).padStart(width)}\t${l}`).join('\n');

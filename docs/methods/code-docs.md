@@ -103,7 +103,7 @@ for `completion` it may be a prefix, for `signature` the cursor goes after the f
 `(`). Results: hover `{ markdown }`; definition `{ locations: [{ path, line, column, text }] }`
 or `{ native: true, signature, docs, hint }`; references `{ count, locations, note? }`;
 highlight `{ positions }`; signature `{ signatures: [{ label, doc? }], active_parameter }`;
-completion `{ prefix?, total, matching, items: [{ label, kind }] }`.
+completion `{ prefix?, total, matching, items: [{ label, kind }], hint? }` (`hint` explains an empty list: prefix matched nothing, inside a comment/string, or script level outside a function).
 
 ### code.rename (write, not destructive, not idempotent)
 
@@ -124,14 +124,18 @@ classes down. `"Class.fragment"` searches that class and its ancestors.
 
 ### docs.class (read)
 
-`{ name, members = false, inherited = false, max_chars = 4000 }`. `name` is a class
+`{ name, members = false, inherited = false, max_chars = 4000 (12000 with members/inherited) }`. `name` is a class
 (engine, builtin, `@GlobalScope`, `@GDScript`, project `class_name` or autoload) or
 `"Class.member"` (inherited members resolve to their declaring class: `declared_in`).
 Class result: `{ name, kind, path?, inherits: [...chain], brief, description,
 member_counts | members: { methods: ["rotate(radians: float) -> void -- Applies a
 rotation..."], ... }, inherited?: { Node: "add_child(), ..." } }`. Member result:
 `{ class, member, kind, signature, description, values? }`. Descriptions are BBCode
-converted to Markdown, truncated at `max_chars`. Unknown names get did-you-mean hints.
+converted to Markdown. `max_chars` caps the whole result text: the description gets at
+most a third of it when member lists follow, then members, then inherited names
+(`members_truncated` / `inherited_truncated` say when something was cut). `set_x` /
+`get_x` / `is_x` methods of a listed property `x` are folded into it (`members_note`).
+Unknown names get did-you-mean hints.
 
 ## 4. Plugin additions (plugin 0.1.0)
 

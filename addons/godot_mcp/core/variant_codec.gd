@@ -100,6 +100,24 @@ static func to_json(v: Variant) -> String:
 # Encoding
 # ---------------------------------------------------------------------------------------
 
+## True when a value read back after a set is not what was set (Godot clamped it, or a
+## setter changed it), for the "reads back as" warnings of node.set, resource.set and
+## game.set. Floats compare approximately: a GDScript float is 64-bit, but many engine
+## properties store a 32-bit float, so 1.6 reads back as 1.60000002384186 (float32 keeps
+## about 7 significant digits; is_equal_approx allows a relative 1e-5). Vectors, colors,
+## quaternions and transforms use their own is_equal_approx for the same reason.
+static func read_back_differs(now: Variant, wanted: Variant) -> bool:
+	if typeof(now) != typeof(wanted) or wanted is Object:
+		return false
+	if now is float:
+		return not is_equal_approx(now, wanted)
+	match typeof(now):
+		TYPE_VECTOR2, TYPE_VECTOR3, TYPE_VECTOR4, TYPE_COLOR, TYPE_QUATERNION, TYPE_PLANE, \
+		TYPE_RECT2, TYPE_AABB, TYPE_TRANSFORM2D, TYPE_TRANSFORM3D, TYPE_BASIS:
+			return not now.is_equal_approx(wanted)
+	return now != wanted
+
+
 ## Converts any Variant into a JSON-safe value. `root` is the scene root used to express
 ## Node references as scene-relative paths (may be null).
 static func encode(v: Variant, root: Node = null, depth: int = 0) -> Variant:
@@ -167,16 +185,26 @@ static func _encode_object(obj: Object, root: Node, depth: int) -> Variant:
 		var out: Dictionary = {"resource": null, "class": res.get_class(), "embedded": true}
 		# Extension to the protocol (extra keys are allowed): for top-level embedded
 		# resources also show their stored properties, otherwise e.g. a CollisionShape2D's
-		# RectangleShape2D size would be invisible to the client.
+		# RectangleShape2D size would be invisible to the client. Only the non-default ones
+		# (with a count of the rest): a StandardMaterial3D has ~150 stored properties, and
+		# node.get / node.set read-backs used to list all of them.
 		if depth == 0:
-			out["properties"] = encode_object_properties(res, root, depth + 1)
+			var omitted: Array = [0]
+			out["properties"] = encode_object_properties(res, root, depth + 1, omitted)
+			if int(omitted[0]) > 0:
+				out["defaults_omitted"] = omitted[0]
 		return out
 	return {"object": obj.get_class()}
 
 
 ## Encodes the stored, non-internal properties of an object (used for embedded resources).
-static func encode_object_properties(obj: Object, root: Node, depth: int = 1) -> Dictionary:
+## When `omitted` is given (a one-element Array used as an out-parameter), properties equal
+## to their class/script default are skipped and counted in omitted[0]; without it every
+## stored property is encoded (audio effect listings rely on that).
+static func encode_object_properties(obj: Object, root: Node, depth: int = 1, omitted: Variant = null) -> Dictionary:
 	var out: Dictionary = {}
+	var skip_defaults: bool = omitted is Array and not (omitted as Array).is_empty()
+	var script: Script = obj.get_script() as Script
 	for info: Dictionary in obj.get_property_list():
 		var usage: int = info["usage"]
 		if (usage & PROPERTY_USAGE_STORAGE) == 0:
@@ -184,8 +212,23 @@ static func encode_object_properties(obj: Object, root: Node, depth: int = 1) ->
 		var pname: String = info["name"]
 		if pname.begins_with("resource_") or pname == "script" or pname.begins_with("_"):
 			continue
-		out[pname] = encode(obj.get(pname), root, depth)
+		var v: Variant = obj.get(pname)
+		if skip_defaults and _is_default_value(obj, script, pname, v):
+			omitted[0] = int(omitted[0]) + 1
+			continue
+		out[pname] = encode(v, root, depth)
 	return out
+
+
+## True when `v` equals the class default of `pname` (or the script default when the class
+## has none). Unknown defaults (null) only match a null value, so nothing is hidden by mistake.
+static func _is_default_value(obj: Object, script: Script, pname: String, v: Variant) -> bool:
+	var default: Variant = ClassDB.class_get_property_default_value(obj.get_class(), pname)
+	if default == null and script != null:
+		default = script.get_property_default_value(pname)
+	if default == null:
+		return v == null
+	return typeof(v) == typeof(default) and v == default
 
 
 # ---------------------------------------------------------------------------------------

@@ -72,6 +72,25 @@ describe.skipIf(!enabled)('docs tools', () => {
     expect(r.inherited.Node).toContain('signal ready');
   });
 
+  it('keeps the whole result within max_chars and folds property accessors', async () => {
+    // MCP_TEST_LOG: NavigationAgent3D members with max_chars 2500 returned ~12k characters.
+    const res = await call('godot_docs_class', { name: 'NavigationAgent3D', members: true, max_chars: 2500 });
+    const text = (res as { content: { text: string }[] }).content[0]!.text;
+    expect(text.length).toBeLessThanOrEqual(2500);
+    const r = JSON.parse(text);
+    expect(r.members_truncated).toBeTruthy();
+    const full = json(await call('godot_docs_class', { name: 'NavigationAgent3D', members: true, max_chars: 50_000 }));
+    expect(full.members_truncated).toBeUndefined();
+    expect(full.members.properties.some((m: string) => m.startsWith('var target_position: Vector3'))).toBe(true);
+    // set_target_position/get_target_position repeat the property; other methods stay.
+    expect(full.members.methods.some((m: string) => m.startsWith('set_target_position('))).toBe(false);
+    expect(full.members.methods.some((m: string) => m.startsWith('get_next_path_position('))).toBe(true);
+    expect(full.members_note).toMatch(/accessors of listed properties omitted/);
+    // inherited lists obey the cap too.
+    const inh = await call('godot_docs_class', { name: 'Node2D', inherited: true, max_chars: 1500 });
+    expect((inh as { content: { text: string }[] }).content[0]!.text.length).toBeLessThanOrEqual(1500);
+  });
+
   it('returns single members, including inherited ones and @GDScript', async () => {
     const pre = json(await call('godot_docs_class', { name: '@GDScript.preload' }));
     expect(pre).toMatchObject({ class: '@GDScript', member: 'preload', kind: 'utility', signature: 'func preload(path: String) -> Resource' });

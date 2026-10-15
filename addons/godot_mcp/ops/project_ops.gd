@@ -466,9 +466,19 @@ static func edit_autoload(params: Dictionary, env: Dictionary) -> Dictionary:
 		if not FileAccess.file_exists(path):
 			return R.err(R.NOT_FOUND, "autoload.edit: '%s' does not exist. Create the script first (godot_files_write) or check the path." % path)
 		if path.get_extension().to_lower() == "gd":
-			var check: Dictionary = ScriptValidate.validate_source(FileAccess.get_file_as_string(path), path)
+			var source: String = FileAccess.get_file_as_string(path)
+			var check: Dictionary = ScriptValidate.validate_source(source, path)
 			if not bool(check["valid"]):
 				warnings.append("'%s' has compile errors; the game will fail to start until they are fixed: %s" % [path, JSON.stringify(check["errors"])])
+			# Godot instantiates an autoload script's native base and refuses anything that is
+			# not a Node: "Failed to instantiate an autoload, script '...' does not inherit
+			# from 'Node'." (main/main.cpp, Godot 4.7.2; the Autoload tab checks the same in
+			# EditorAutoloadSettings::_create_autoload). Such an autoload can never work, so
+			# refuse it. A scene is always fine: a PackedScene's root is a Node.
+			var base: String = _script_native_base(path, source, bool(check["valid"]))
+			if not base.is_empty() and not ClassDB.is_parent_class(base, "Node"):
+				return R.err(R.BAD_PARAMS, ("autoload.edit: '%s' extends %s, which is not a Node; Godot only autoloads Node scripts and fails at startup with \"script does not inherit from 'Node'\". " +
+					"Make the script extend Node (or a Node subclass), or load the %s from a Node autoload instead (e.g. `var data := preload(\"%s\")`).") % [path, base, base, path])
 		if index > list.size():
 			index = list.size()
 		var plugin: Object = env.get("plugin")
@@ -523,6 +533,44 @@ static func edit_autoload(params: Dictionary, env: Dictionary) -> Dictionary:
 	if not warnings.is_empty():
 		result["warnings"] = warnings
 	return R.ok(result)
+
+
+## Native class a GDScript file ends up instantiating (e.g. "Node2D", "MeshLibrary"), or ""
+## when it can't be told. A script that compiles answers through
+## Script.get_instance_base_type(), which follows `extends` through class_name and path
+## bases. One with compile errors is resolved from its text instead: `extends <Native>`,
+## `extends <class_name>` (via the global class list) or `extends "res://base.gd"`,
+## followed up to 16 levels; no `extends` at all means RefCounted (GDScript's default).
+static func _script_native_base(path: String, source: String, compiles: bool) -> String:
+	if compiles:
+		var script := GDScript.new()
+		script.source_code = source
+		script.set_path_cache(path)
+		if script.reload() == OK:
+			var native: String = String(script.get_instance_base_type())
+			if not native.is_empty():
+				return native
+	var re := RegEx.create_from_string("(?m)^(?:@\\w+(?:\\([^)\\n]*\\))?\\s+)*(?:class_name\\s+\\w+\\s+)?extends\\s+(\"[^\"]*\"|'[^']*'|[A-Za-z_][\\w.]*)")
+	var text: String = source
+	for _hop: int in 16:
+		var m: RegExMatch = re.search(text)
+		if m == null:
+			return "RefCounted"
+		var target: String = m.get_string(1)
+		var next_path: String = ""
+		if target.begins_with("\"") or target.begins_with("'"):
+			next_path = target.substr(1, target.length() - 2)
+		elif ClassDB.class_exists(target):
+			return target
+		else:
+			for entry: Dictionary in ProjectSettings.get_global_class_list():
+				if str(entry.get("class", "")) == target:
+					next_path = str(entry.get("path", ""))
+					break
+		if next_path.is_empty() or not FileAccess.file_exists(next_path):
+			return ""
+		text = FileAccess.get_file_as_string(next_path)
+	return ""
 
 
 ## Assigns the existing autoload order numbers (sorted) to `keys` in sequence, the way the

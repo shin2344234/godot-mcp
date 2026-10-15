@@ -200,6 +200,12 @@ async function exitedResult(run: GameRun) {
   return { run_id: run.id, stopped: false, running: run.running, exited: true, exit_code: run.exitCode, note: 'The game exited. godot_run_output shows its last output and errors.' };
 }
 
+/** `text` ending in sentence punctuation (adds a period when it has none). */
+export function withPeriod(text: string): string {
+  const t = text.trimEnd();
+  return /[.!?:]$/.test(t) ? t : `${t}.`;
+}
+
 // --- Tools ----------------------------------------------------------------------
 
 export const debugBreakpoints = defineOp({
@@ -291,7 +297,10 @@ export const debugControl = defineOp({
       if (r.error) {
         throw new OpError(
           'GODOT_ERROR',
-          `Evaluating "${expression}" failed: ${r.error} Expressions use Godot's Expression class: one expression (no statements or "=" assignments) over the frame's locals, self's members and methods, autoloads and singletons.`,
+          // Godot's error text usually has no final period ("... on base type Object"), so
+          // add one before our hint, or the two sentences run together.
+          `Evaluating "${expression}" failed: ${withPeriod(r.error)} Expressions use Godot's Expression class: one expression (no statements or "=" assignments) over the frame's locals, self's members and methods, autoloads and singletons. ` +
+            '(This error is not recorded as a game error.)',
         );
       }
       return { data: { run_id: run.id, expression, frame, value: formatValue({ ...r, name: expression, scope: 3 }) } };

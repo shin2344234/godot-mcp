@@ -107,12 +107,15 @@ export const docsClass = defineOp({
     name: z.string().min(1).describe('e.g. "CharacterBody2D", "Node.add_child", "@GDScript.preload", a project class_name.'),
     members: z.boolean().default(false).describe('List members with one-line briefs.'),
     inherited: z.boolean().default(false).describe('Also list inherited member names.'),
-    max_chars: z.number().int().min(200).max(50_000).default(4000),
+    max_chars: z.number().int().min(200).max(50_000).optional().describe('Cap on the whole result; default 4000, 12000 with members/inherited.'),
   }),
   readOnly: true,
   idempotent: true,
-  async run({ name, members, inherited, max_chars }, ctx) {
+  async run({ name, members, inherited, max_chars: maxChars }, ctx) {
     const { engine, project, version } = await searchers(ctx);
+    // max_chars caps the whole JSON result (MCP_TEST_LOG: 2500 asked, ~12k returned when
+    // the member list had its own, larger budget). Member lists need more room by default.
+    const max_chars = maxChars ?? (members || inherited ? 12_000 : 4000);
     const q = name.trim();
     let cls = project.getClass(q);
     let memberName: string | undefined;
@@ -182,50 +185,117 @@ export const docsClass = defineOp({
       ...(chain.length > 1 ? { inherits: chain.slice(1).map((c) => c.n) } : cls.i ? { inherits: [cls.i] } : {}),
       ...(cls.a ? { editor_only: true } : {}),
       brief: bbcodeToMarkdown(cls.b),
-      description: truncate(bbcodeToMarkdown(cls.d), max_chars),
       godot_version: version,
     };
+    // The description gets what's left of the budget, at most a third of it when member
+    // lists follow, so they aren't crowded out.
+    const descCap = (members || inherited ? Math.floor(max_chars / 3) : max_chars) - jsonSize(data) - 20;
+    data.description = truncate(bbcodeToMarkdown(cls.d), Math.max(80, descCap));
     if (members) {
-      // Own members with briefs, grouped by kind; capped so a huge class (@GlobalScope,
-      // Control) can't flood the context.
-      const budget = max_chars * 4;
-      let used = 0;
-      let truncated = false;
-      const groups: Record<string, string[]> = {};
+      // Own members with briefs, grouped by kind. set_x/get_x/is_x methods of a listed
+      // property x only repeat it (Godot binds them as the property's setter/getter), so
+      // they are folded into the property.
+      const props = new Set(cls.m.filter((m) => m.k === 'property').map((m) => m.n));
+      const lines: [string, string][] = [];
+      let folded = 0;
       for (const m of cls.m) {
         if (m.k === 'constant' && m.e) continue; // listed inside its enum
+        if (m.k === 'method' && props.has(accessorOf(m.n) ?? '')) {
+          folded++;
+          continue;
+        }
         const brief = m.d ? firstSentence(bbcodeToMarkdown(m.d), 90) : '';
         let line = m.k === 'enum' ? (m.s ?? m.n) : shortSig(m);
         if (line.length > 300) line = line.slice(0, 297) + '...';
         if (brief) line += ` -- ${brief}`;
-        if (used + line.length > budget) {
-          truncated = true;
-          break;
-        }
-        used += line.length;
-        (groups[GROUP[m.k]] ??= []).push(line);
+        lines.push([GROUP[m.k], line]);
       }
+      const groups: Record<string, string[]> = {};
       data.members = groups;
-      if (truncated) data.members_truncated = 'raise max_chars, or ask for single members with "Class.member"';
+      if (folded) data.members_note = `${folded} set_/get_/is_ accessors of listed properties omitted`;
+      // Groups appear in first-seen order but lines arrive interleaved, so remember which
+      // group got each line to undo the most recent one.
+      const added: string[] = [];
+      const add = (i: number) => {
+        const [group, line] = lines[i]!;
+        (groups[group] ??= []).push(line);
+        added.push(group);
+      };
+      const drop = () => {
+        const group = added.pop();
+        if (group === undefined) return false;
+        groups[group]!.pop();
+        if (!groups[group]!.length) delete groups[group];
+        return true;
+      };
+      if (!fillWithin(data, max_chars, lines.length, add, drop)) {
+        data.members_truncated = 'raise max_chars, or ask for single members with "Class.member"';
+        while (jsonSize(data) > max_chars && drop());
+      }
     } else {
       data.member_counts = Object.fromEntries(Object.entries(countKinds(cls.m)).filter(([, n]) => n > 0));
     }
     if (inherited && chain.length > 1) {
       const inh: Record<string, string> = {};
+      const entries: [string, string][] = [];
       for (const anc of chain.slice(1)) {
         // Property accessors (set_x/get_x/is_x for property x) only repeat the property.
         const props = new Set(anc.m.filter((m) => m.k === 'property').map((m) => m.n));
-        const accessor = (n: string) => /^(?:set|get|is)_(.+)$/.exec(n)?.[1];
         const names = anc.m
-          .filter((m) => m.k === 'property' || m.k === 'signal' || (m.k === 'method' && !props.has(accessor(m.n) ?? '')))
+          .filter((m) => m.k === 'property' || m.k === 'signal' || (m.k === 'method' && !props.has(accessorOf(m.n) ?? '')))
           .map((m) => (m.k === 'method' ? `${m.n}()` : m.k === 'signal' ? `signal ${m.n}` : m.n));
-        if (names.length) inh[anc.n] = names.join(', ');
+        for (const n of names) entries.push([anc.n, n]);
       }
       data.inherited = inh;
+      const add = (i: number) => {
+        const [owner, n] = entries[i]!;
+        inh[owner] = inh[owner] ? `${inh[owner]}, ${n}` : n;
+      };
+      const drop = () => {
+        const owner = Object.keys(inh).pop();
+        if (!owner) return false;
+        const cut = inh[owner]!.lastIndexOf(', ');
+        if (cut < 0) delete inh[owner];
+        else inh[owner] = inh[owner]!.slice(0, cut);
+        return true;
+      };
+      if (!fillWithin(data, max_chars, entries.length, add, drop)) {
+        data.inherited_truncated = 'raise max_chars for more';
+        while (jsonSize(data) > max_chars && drop());
+      }
     }
     return { data };
   },
 });
+
+/** "set_speed" -> "speed" (also get_/is_); undefined for other names. */
+function accessorOf(name: string): string | undefined {
+  return /^(?:set|get|is)_(.+)$/.exec(name)?.[1];
+}
+
+/** Size of `v` as the tool result text (src/mcp/server.ts sends JSON.stringify(data, null, 1)). */
+function jsonSize(v: unknown): number {
+  return JSON.stringify(v, null, 1).length;
+}
+
+/**
+ * Add items 0..count-1 to `data` (through `add`) while its JSON stays within `max`.
+ * The size is measured every few items and on every item near the limit, which keeps
+ * this cheap even for @GlobalScope. Returns false if not everything fit; the item that
+ * overflowed has been removed again with `drop` (the caller trims further if needed).
+ */
+function fillWithin(data: unknown, max: number, count: number, add: (i: number) => void, drop: () => boolean): boolean {
+  for (let i = 0; i < count; i++) {
+    add(i);
+    if (i % 8 === 7 || i === count - 1 || jsonSize(data) > max - 400) {
+      if (jsonSize(data) > max) {
+        drop();
+        return false;
+      }
+    }
+  }
+  return true;
+}
 
 function countKinds(ms: DocMember[]): Record<string, number> {
   const out: Record<string, number> = {};

@@ -70,6 +70,11 @@ params: `{ "path", "properties": { "albedo_color": "#ff0000", "next_pass:albedo_
   like `"albedo_color:a"`); on a Theme, `"<Type>/<data type>/<item>"` (creates the item if
   needed). A null intermediate (`next_pass` unset) → `BAD_PARAMS` suggesting
   `{"next_pass": {"new": "StandardMaterial3D"}}` first.
+* Dynamic `_set` keys that a class lists only once they exist are accepted too, e.g.
+  MeshLibrary `"item/<id>/name"`, `"item/<id>/mesh"`, `"item/<id>/mesh_transform"` (creates
+  the item; undo removes it) or TileSet `"physics_layer_<n>/collision_layer"`. A key counts
+  as valid if a throwaway duplicate lists it after `set(key, null)`; its PropertyInfo types
+  the value (so `{"new": "BoxMesh"}` works for `item/0/mesh`). Same for `resource.create`.
 * All values are validated before anything changes. Imported assets (`.import` next to
   them) and scenes are refused with a pointer to `import.set` / `node.set`.
 * Editor: edits the cached instance (open scenes update immediately) as one
@@ -177,7 +182,11 @@ params: `{ "scene"?, "path": "HUD/Panel", "preset"?: "full_rect", "resize_mode"?
   `resize_mode`: `minsize`, `keep_width`, `keep_height`, `keep_size`. Applied like the
   inspector: `layout_mode` becomes Anchors (unless the node is a scene root/uncontrolled),
   then `set_anchors_and_offsets_preset(preset, resize_mode, margin)` and the matching grow
-  directions.
+  directions. That call sizes the rect from the content minimum and ignores
+  `custom_minimum_size`, which Godot applies later by growing the rect in the grow
+  direction; with `custom_minimum_size` in the same call, the offsets of non-stretched axes
+  are written for that grown rect (e.g. `top_right`, margin 16, `[200, 30]` →
+  `[-216, 16, -16, 46]`).
 * `anchors` are set as given with the offsets unchanged; `offsets` are applied after.
 * `size_flags` values: `fill`, `expand`, `expand_fill`, `shrink_center`, `shrink_end`,
   `shrink_begin`, a list or `"fill|expand"`, or a number.
@@ -228,7 +237,10 @@ params: `{ "path": "res://icon.svg" }` → result:
 Parsed from `<path>.import` with ConfigFile. `imported` = every dest file exists and the
 import did not fail (`null` for the `keep`/`skip` importers). A file without `.import` →
 `NOT_FOUND` explaining whether the type is never imported (use `resource.read`) or the
-project was not imported yet.
+asset was not imported yet; the latter carries `data.needs_import: true`, and the
+**server** then imports it and retries (both `import.get` and `import.set`): headless with
+`godot --headless --path <project> --import`, in the editor with a full filesystem scan
+(`filesystem.refresh`), polling up to 30 s until the `.import` file exists.
 
 ## import.set (E/H)
 

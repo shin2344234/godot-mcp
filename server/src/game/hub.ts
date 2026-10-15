@@ -20,7 +20,8 @@ import type { EditorBridge } from '../bridge/editorBridge.js';
 import { OpError } from '../errors.js';
 import type { GameRun, RunManager } from '../godot/runs.js';
 import type { GameMessage } from './debugSession.js';
-import { RuntimeChannel, type GameTransport, type RuntimeHello } from './runtime.js';
+import { debugStateFor } from './debugState.js';
+import { GameStoppedError, RuntimeChannel, type GameTransport, type RuntimeHello } from './runtime.js';
 import { GodotFloat, type Encodable } from './variant.js';
 
 /** How long a tool waits for a just-started game's runtime to say hello. */
@@ -53,6 +54,14 @@ class EditorTransport extends EventEmitter implements GameTransport {
       } else if (event === 'game.stopped' && Number(d.session) === this.session) {
         this.open = false;
         this.emit('close');
+      } else if ((event === 'game.breaked' || event === 'game.continued') && Number(d.session) === this.session) {
+        // The editor's debugger stopped or resumed the game (editor/game_relay.gd). Present
+        // it like the native messages a process run sends, so RuntimeChannel fails pending
+        // requests at once instead of letting them time out.
+        const can = (data as { can_debug?: boolean } | undefined)?.can_debug ?? true;
+        const msg: GameMessage =
+          event === 'game.breaked' ? { message: 'debug_enter', thread: 0, data: [can, '', true, 0] } : { message: 'debug_exit', thread: 0, data: [] };
+        this.emit('message', msg);
       } else if (event === 'game.message' && typeof d.message === 'string') {
         this.session = Number(d.session);
         this.open = true;
@@ -166,6 +175,47 @@ export async function runtimeCall(
   timeoutMs?: number,
 ): Promise<{ data: Record<string, unknown> }> {
   const game = await resolveGame(ctx, runId);
-  const result = (await game.channel.request(method, params, { timeoutMs, signal: ctx.signal })) as Record<string, unknown>;
-  return { data: { run_id: game.runId, ...result } };
+  try {
+    const result = (await game.channel.request(method, params, { timeoutMs, signal: ctx.signal })) as Record<string, unknown>;
+    return { data: { run_id: game.runId, ...result } };
+  } catch (err) {
+    // The call ran into a breakpoint (or script error / pause): report the stop as the
+    // result, right away, instead of an error after the timeout.
+    if (err instanceof GameStoppedError) return { data: { run_id: game.runId, ...(await describeStop(game, err)) } };
+    throw err;
+  }
+}
+
+/**
+ * What runtimeCall returns when the game stopped in the debugger mid-call:
+ *   { completed: false, stopped: { reason, error?, at?: {file, line, function} }, note }
+ * For process runs the server is the debugger, so the stop reason and the innermost
+ * frame come from the run's DebugState (debugState.ts). Games started from the editor
+ * stop in the editor's own debugger; the relay only tells us that it stopped.
+ */
+export async function describeStop(game: GameTarget, err: GameStoppedError): Promise<Record<string, unknown>> {
+  const [canContinue, errorText] = err.debugEnter as [boolean, string];
+  if (game.run?.session) {
+    const state = debugStateFor(game.run);
+    await state.ready;
+    const stop = state.stop;
+    // The stack is one quick round trip while stopped; a failure only loses the location.
+    const top = stop?.hasStack ? (await state.stack().catch(() => []))[0] : undefined;
+    return {
+      completed: false,
+      stopped: {
+        reason: stop?.reason ?? 'breakpoint',
+        ...(stop?.error ? { error: stop.error } : {}),
+        ...(top ? { at: { file: top.file, line: top.line, function: top.function } } : {}),
+      },
+      note:
+        `The game stopped in the debugger while handling this call ("${err.method}"); the rest of it runs after the game resumes. ` +
+        'Inspect with godot_debug_state, step or resume with godot_debug_control (action "continue").',
+    };
+  }
+  return {
+    completed: false,
+    stopped: { reason: 'debugger', can_continue: Boolean(canContinue), ...(errorText ? { error: errorText } : {}) },
+    note: `The game stopped in the Godot editor's debugger (breakpoint or error) while handling this call ("${err.method}"). Continue it from the editor's Debugger panel; the rest of the call runs after that.`,
+  };
 }
