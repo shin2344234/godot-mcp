@@ -28,8 +28,8 @@ extends RefCounted
 ## Side effects outside the scene are not rolled back: signal.connect with create_method
 ## appends a stub function to a .gd file, which stays even if a later op fails.
 ##
-## This file reads ChangeSet's _do_ops/_undo_ops directly (direct undo and combining are
-## not part of ChangeSet's public API yet); keep it in sync with core/change_set.gd.
+## Direct undo and combining use ChangeSet's apply_undo_direct / free_created_direct /
+## absorb_in_order.
 
 const R := preload("mcp_result.gd")
 const Params := preload("params.gd")
@@ -173,34 +173,17 @@ static func _wrap_error(err: Dictionary, index: int, method: String) -> Dictiona
 ## (the same order EditorUndoRedoManager would use).
 static func _revert_direct(applied: Array[ChangeSet]) -> void:
 	for i: int in range(applied.size() - 1, -1, -1):
-		for op: Dictionary in applied[i]._undo_ops:
-			var obj: Object = op["object"]
-			if not is_instance_valid(obj):
-				continue
-			match op["kind"]:
-				"method":
-					obj.callv(op["method"], op["args"])
-				"property":
-					obj.set(op["property"], op["value"])
+		applied[i].apply_undo_direct()
 
 
 ## After a failed batch was reverted, nodes created by its ops are detached orphans.
 static func _free_created(applied: Array[ChangeSet]) -> void:
 	for cs: ChangeSet in applied:
-		for op: Dictionary in cs._do_ops:
-			if op["kind"] != "reference":
-				continue
-			var obj: Object = op["object"]
-			if is_instance_valid(obj) and obj is Node and (obj as Node).get_parent() == null:
-				obj.free()
+		cs.free_created_direct()
 
 
-## One ChangeSet equivalent to applying `applied` in order: do ops in order, undo ops of
-## the last set first.
+## One ChangeSet equivalent to applying `applied` in order.
 static func _combine(applied: Array[ChangeSet]) -> ChangeSet:
 	var out := ChangeSet.new()
-	for cs: ChangeSet in applied:
-		out._do_ops.append_array(cs._do_ops)
-	for i: int in range(applied.size() - 1, -1, -1):
-		out._undo_ops.append_array(applied[i]._undo_ops)
+	out.absorb_in_order(applied)
 	return out
