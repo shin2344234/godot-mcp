@@ -101,9 +101,10 @@ Tool names are `godot_` plus the method with dots replaced, e.g. `godot_node_add
 | code | `code_diagnostics`, `code_symbols`, `code_lookup`, `code_rename` |
 | docs | `docs_search`, `docs_class` |
 | run | `run_start`, `run_stop`, `run_output` |
-| game | `game_tree`, `game_get`, `game_edit`, `game_eval`, `game_input`, `game_time`, `game_record`, `game_screenshot`, `game_perf` |
+| game | `game_tree`, `game_get`, `game_edit`, `game_eval`, `game_input`, `game_time`, `game_record`, `game_screenshot` (also the editor 2D/3D views), `game_perf` |
 | debug | `debug_breakpoints`, `debug_control`, `debug_state` |
-| editor | `editor_logs`, `editor_launch` |
+| test | `test_run` (GUT or GdUnit4, whichever the project has) |
+| editor | `editor_logs`, `editor_launch`, `editor_ui` |
 | discovery | `godot_tools` (plus `godot_call_read` and `godot_call_write` in compact mode) |
 
 A few tools need the live editor (`scene_open`, `scene_save_as`, `scene_close`, `editor_logs`); the rest also work with the editor closed. The `code_*` tools start a private headless editor for the GDScript language server when your editor isn't open. Export credentials (`.godot/export_credentials.cfg`) are never read or returned.
