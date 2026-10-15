@@ -29,10 +29,14 @@ const LogBuffer := preload("core/log_buffer.gd")
 const BridgeServer := preload("bridge/bridge_server.gd")
 const SessionFile := preload("bridge/session_file.gd")
 const EditorBackend := preload("editor/editor_backend.gd")
+const GameRelay := preload("editor/game_relay.gd")
+const RuntimeOverride := preload("core/runtime_override.gd")
 
 var _logs: LogBuffer
 var _backend: EditorBackend
 var _server: BridgeServer
+## [runtime] Relays the runtime autoload's messages for games started from this editor.
+var _relay: GameRelay
 
 ## [code/docs area] LSP-only mode flags (see the header comment).
 const LSP_ONLY_ARG: String = "--godot-mcp-lsp-only"
@@ -69,6 +73,12 @@ func _enter_tree() -> void:
 
 	_backend = EditorBackend.new(_logs, self)
 	_server = BridgeServer.new(_backend.handle, _welcome_payload)
+	# [runtime] Not in LSP-only mode: that editor never runs games.
+	if not _lsp_only:
+		RuntimeOverride.restore_if_stale()
+		_relay = GameRelay.new()
+		_relay.broadcast = _server.broadcast_event
+		add_debugger_plugin(_relay)
 	var base_port: int = int(ProjectSettings.get_setting(Constants.PORT_SETTING, Constants.DEFAULT_PORT))
 	var err: int = _server.start(base_port)
 	if err != OK:
@@ -87,6 +97,10 @@ func _enter_tree() -> void:
 
 func _exit_tree() -> void:
 	set_process(false)
+	if _relay != null:
+		remove_debugger_plugin(_relay)
+		_relay = null
+		RuntimeOverride.restore()
 	if _server != null:
 		_server.stop()
 		_server = null
@@ -113,6 +127,23 @@ func _process(delta: float) -> void:
 				print("Godot MCP: no MCP server connected for %d s; closing this LSP-only editor." % int(_no_client_sec))
 				_lsp_only = false # quit once
 				get_tree().quit()
+
+
+## [runtime] Called right before the editor runs the project: load the runtime autoload
+## into that game through a temporary override.cfg (core/runtime_override.gd). The relay
+## restores the file when the game's debugger session starts; the timer is a fallback for
+## a game that never connects.
+func _build() -> bool:
+	if _relay == null:
+		return true
+	if RuntimeOverride.inject() == OK:
+		get_tree().create_timer(20.0).timeout.connect(RuntimeOverride.restore)
+	return true
+
+
+## [runtime] For the bridge methods game.send / game.status (editor/editor_backend.gd).
+func get_game_relay() -> GameRelay:
+	return _relay
 
 
 ## If session.json belongs to another live editor whose bridge accepts connections, returns

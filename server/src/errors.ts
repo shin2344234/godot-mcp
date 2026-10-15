@@ -26,7 +26,13 @@ export type ErrorCode =
   | 'GODOT_NOT_FOUND'
   /** The project doesn't have the godot_mcp addon installed. */
   | 'ADDON_MISSING'
-  | 'TIMEOUT';
+  | 'TIMEOUT'
+  /** A runtime tool was called but no game is running (or it exited). */
+  | 'GAME_NOT_RUNNING'
+  /** The client cancelled the request. */
+  | 'CANCELLED'
+  /** The feature is turned off by configuration (e.g. code eval without --allow-eval). */
+  | 'DISABLED';
 
 export class OpError extends Error {
   constructor(

@@ -20,6 +20,9 @@ import { findGodot, GODOT_NOT_FOUND_HINT } from '../godot/binary.js';
 import { log } from '../log.js';
 import { defineOp } from './types.js';
 
+/** How long run.start waits for the runtime's hello before returning. */
+const RUNTIME_WAIT_MS = 10_000;
+
 /** Can we open a window? On Linux without a display server, no. */
 function canShowWindow(): boolean {
   if (process.platform !== 'linux') return true;
@@ -58,14 +61,39 @@ export const runStart = defineOp({
     const godot = await findGodot(ctx.config.godotPath);
     if (!godot) throw new OpError('GODOT_NOT_FOUND', GODOT_NOT_FOUND_HINT);
     const extraArgs = quit_after_frames ? ['--quit-after', String(quit_after_frames)] : [];
-    const run = ctx.runs.start(godot.path, ctx.config.projectPath, {
+    const run = await ctx.runs.start(godot.path, ctx.config.projectPath, {
       scene: scene && scene !== 'main' ? scene : undefined,
       headless: headless ?? !canShowWindow(),
       extraArgs,
     });
-    // Give Godot a moment so immediate startup errors are already captured.
-    await new Promise((r) => setTimeout(r, 1500));
-    return { data: { run_id: run.id, mode: 'process', headless: run.headless, running: run.running, exit_code: run.exitCode, ...run.counts() } };
+    // Wait until the runtime says hello (the game is up and runtime tools work), the game
+    // exits, or a few seconds pass. Startup errors are captured either way.
+    const exited = new Promise<void>((r) => {
+      const poll = setInterval(() => {
+        if (!run.running) {
+          clearInterval(poll);
+          r();
+        }
+      }, 100);
+      setTimeout(() => clearInterval(poll), RUNTIME_WAIT_MS + 100);
+    });
+    const ready = await Promise.race([
+      run.channel!.ready.then(() => true),
+      exited.then(() => false),
+      new Promise<boolean>((r) => setTimeout(() => r(false), RUNTIME_WAIT_MS)),
+    ]);
+    return {
+      data: {
+        run_id: run.id,
+        mode: 'process',
+        headless: run.headless,
+        running: run.running,
+        exit_code: run.exitCode,
+        // true: godot_game_* tools can inspect and control this run.
+        runtime: ready,
+        ...run.counts(),
+      },
+    };
   },
 });
 

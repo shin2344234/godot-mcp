@@ -170,6 +170,14 @@ func _handle_request(c: Dictionary, d: Dictionary) -> void:
 	_send(c, response)
 
 
+## Sends an event frame to every authenticated client, e.g. runtime messages relayed from
+## a game started in the editor: {"type": "event", "event": "game.message", "data": {...}}.
+func broadcast_event(event: String, data: Dictionary) -> void:
+	for c: Dictionary in _clients:
+		if c["authed"] and not c["closing"]:
+			_send(c, {"type": "event", "event": event, "data": data})
+
+
 func _send(c: Dictionary, payload: Dictionary) -> void:
 	var peer: WebSocketPeer = c["peer"]
 	if peer.get_ready_state() != WebSocketPeer.STATE_OPEN:

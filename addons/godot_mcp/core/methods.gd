@@ -10,7 +10,7 @@ const SceneOps := preload("scene_ops.gd")
 ## (E) methods: need the running editor (edited scene, play controls, editor log, ...).
 const EDITOR_ONLY: PackedStringArray = [
 	"editor.status", "scene.open", "scene.save_as", "run.play", "run.stop",
-	"filesystem.refresh", "logs.read",
+	"filesystem.refresh", "logs.read", "game.send", "game.status",
 ]
 
 ## (E/H) methods: available in both the editor bridge and the headless runner.
