@@ -22,6 +22,7 @@ extends RefCounted
 ## gets it, its internal nodes keep their owner (the instance root) so the .tscn references
 ## the sub-scene instead of inlining a copy of it.
 
+const ResSave := preload("res_save.gd")
 const R := preload("mcp_result.gd")
 const Params := preload("params.gd")
 const Codec := preload("variant_codec.gd")
@@ -747,7 +748,8 @@ static func pack_and_save(root: Node, path: String) -> Dictionary:
 	var err: int = packed.pack(root)
 	if err != OK:
 		return R.godot_err("Packing scene '%s'" % path, err)
-	err = ResourceSaver.save(packed, path)
+	# ResSave keeps the scene's UIDs in headless runs (plain ResourceSaver.save drops them).
+	err = ResSave.save(packed, path)
 	if err != OK:
 		return R.godot_err("Saving scene '%s'" % path, err)
 	return {}
