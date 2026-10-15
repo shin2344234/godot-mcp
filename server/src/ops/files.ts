@@ -15,7 +15,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { OpError } from '../errors.js';
-import { isInGodotCache, PathError, resolveProjectPathStrict, type ProjectPath } from '../project/paths.js';
+import { isInGodotCache, isSecretPath, PathError, resolveProjectPathStrict, type ProjectPath } from '../project/paths.js';
 import { callGodot } from './backend.js';
 import { defineOp, type OpContext } from './types.js';
 
@@ -205,6 +205,8 @@ export const filesSearch = defineOp({
           continue;
         }
         if (!TEXT_EXT.has(path.extname(name).toLowerCase()) && name !== 'project.godot') continue;
+        // Searching from res://.godot would otherwise read the bridge token / export secrets.
+        if (isSecretPath(childRel)) continue;
         if (nameRe && !nameRe.test(name)) continue;
         if (st.size > MAX_READ_BYTES * 4) continue;
         filesScanned++;

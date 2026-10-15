@@ -245,7 +245,7 @@ export const editorLaunch = defineOp({
     const godot = await findGodot(ctx.config.godotPath);
     if (!godot) throw new OpError('GODOT_NOT_FOUND', GODOT_NOT_FOUND_HINT);
     if (!existsSync(`${ctx.config.projectPath}/addons/godot_mcp/plugin.cfg`)) {
-      throw new OpError('ADDON_MISSING', 'The godot_mcp addon is not installed in this project, so the editor would start without the bridge. Copy addons/godot_mcp into the project first.');
+      throw new OpError('ADDON_MISSING', 'The godot_mcp addon is not installed in this project, so the editor would start without the bridge. Install it first with godot_addon_install.');
     }
     const args = ['--editor', '--path', ctx.config.projectPath];
     if (headless || !canShowWindow()) args.unshift('--headless');

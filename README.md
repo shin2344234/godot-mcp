@@ -107,7 +107,7 @@ Tool names are `godot_` plus the method with dots replaced, e.g. `godot_node_add
 | editor | `editor_logs`, `editor_launch`, `editor_ui` |
 | discovery | `godot_tools` (plus `godot_call_read` and `godot_call_write` in compact mode) |
 
-A few tools need the live editor (`scene_open`, `scene_save_as`, `scene_close`, `editor_logs`); the rest also work with the editor closed. The `code_*` tools start a private headless editor for the GDScript language server when your editor isn't open. The export tools never read or write export credentials (`.godot/export_credentials.cfg`).
+A few tools need the live editor (`scene_open`, `scene_save_as`, `scene_close`, `editor_logs`); the rest also work with the editor closed. The `code_*` tools start a private headless editor for the GDScript language server when your editor isn't open. No tool can read, search or write the export credentials (`.godot/export_credentials.cfg`) or the editor bridge's token file.
 
 The `game_*` and `debug_*` tools work on a game started with `run_start` (mode `process`, no editor needed) and, except for breakpoints and the script profiler, on a game started from the editor. The server loads a small runtime into the game through a temporary `override.cfg` that is removed once the game is up; `project.godot` is never changed. The runtime does nothing in exported or normal runs. See [docs/runtime-protocol.md](docs/runtime-protocol.md).
 

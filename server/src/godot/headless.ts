@@ -78,7 +78,7 @@ export class HeadlessRunner {
       throw new OpError(
         'ADDON_MISSING',
         'The godot_mcp addon is not installed in this project (expected addons/godot_mcp/). ' +
-          'Copy the addons/godot_mcp folder from the godot-mcp repository into the project, or open the project in the editor with the plugin enabled.',
+          'Install it with godot_addon_install (or run `npx -y @shin2344234/godot-mcp init` in the project folder).',
       );
     }
 
