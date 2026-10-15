@@ -66,6 +66,8 @@ func _dispatch_module(method: String, descriptor: Dictionary, params: Dictionary
 ##   load_scene  Callable(params) -> {"value": root, "path": path} | error (loads params.scene;
 ##               the caller must free the root)
 ##   save_scene  Callable(root, path) -> {} on success or an error Dictionary
+##   scene_mutations  method name -> planner Callable(root, params) for every scene
+##               mutation (step 1 and modules); used by batch.apply (core/scene_batch.gd)
 func _env() -> Dictionary:
 	return {
 		"editor": false,
@@ -76,7 +78,21 @@ func _env() -> Dictionary:
 		"logs": null,
 		"load_scene": _load_scene,
 		"save_scene": SceneOps.pack_and_save,
+		"scene_mutations": _scene_mutation_planners(),
 	}
+
+
+## Every scene-mutation planner: the step 1 ones plus module methods of kind
+## "scene_mutation" (same as EditorBackend.scene_mutation_planners; the editor backend
+## cannot be preloaded here because it references editor-only classes).
+static func _scene_mutation_planners() -> Dictionary:
+	var out: Dictionary = Methods.scene_mutations()
+	var modules: Dictionary = Methods.module_methods()
+	for method: String in modules:
+		var d: Dictionary = modules[method]
+		if str(d.get("kind", "")) == "scene_mutation":
+			out[method] = d["fn"]
+	return out
 
 
 ## scene.save is a no-op headless: every mutation already saved its scene.
