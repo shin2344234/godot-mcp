@@ -40,7 +40,7 @@ describe.skipIf(!enabled)('world: headless backend', () => {
   }, 240_000);
   afterAll(async () => {
     await client?.close();
-    proj.cleanup();
+    await proj.cleanup();
   });
 
   it('grid.read describes a TileMapLayer and its TileSet', async () => {
@@ -210,7 +210,7 @@ describe.skipIf(!enabled)('world: editor backend', () => {
     } catch {
       // the editor never came up
     }
-    proj.cleanup();
+    await proj.cleanup();
   });
 
   it('grid.edit goes through the editor and is saved by scene.save', async () => {

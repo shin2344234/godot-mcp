@@ -33,7 +33,7 @@ describe.skipIf(!enabled)('project tools (headless)', () => {
   }, 240_000);
   afterAll(async () => {
     await client?.close();
-    proj.cleanup();
+    await proj.cleanup();
   });
 
   it('project.set changes, type-converts and resets settings', async () => {
@@ -221,7 +221,7 @@ describe.skipIf(!enabled)('project tools (editor)', () => {
     } catch {
       // the editor never came up
     }
-    proj.cleanup();
+    await proj.cleanup();
   });
 
   it('project.set goes through the editor and saves project.godot', async () => {

@@ -32,7 +32,7 @@ describe.skipIf(!enabled)('headless backend', () => {
   }, 240_000);
   afterAll(async () => {
     await client?.close();
-    proj.cleanup();
+    await proj.cleanup();
   });
 
   it('reports headless as the scene backend', async () => {
@@ -137,7 +137,7 @@ describe.skipIf(!enabled)('editor backend', () => {
     } catch {
       // no session file: the editor never came up
     }
-    proj.cleanup();
+    await proj.cleanup();
   });
 
   it('routes scene edits through the live editor and saves', async () => {

@@ -27,8 +27,8 @@ describe.skipIf(!enabled)('docs tools', () => {
   }, 60_000);
   afterAll(async () => {
     await client?.close();
-    proj.cleanup();
-    removeDir(cache);
+    await proj.cleanup();
+    await removeDir(cache);
   });
 
   it('builds the index on first use and finds move_and_slide on CharacterBody2D', async () => {

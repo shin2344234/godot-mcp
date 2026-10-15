@@ -28,7 +28,7 @@ describe.skipIf(!enabled)('imports (headless)', () => {
   }, 240_000);
   afterAll(async () => {
     await client?.close();
-    proj.cleanup();
+    await proj.cleanup();
   });
 
   it('reads import settings', async () => {
@@ -83,7 +83,7 @@ describe.skipIf(!enabled)('imports (editor)', () => {
     } catch {
       // the editor never came up
     }
-    proj.cleanup();
+    await proj.cleanup();
   });
 
   it('reimports through the editor filesystem', async () => {

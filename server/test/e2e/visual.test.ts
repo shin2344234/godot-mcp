@@ -29,7 +29,7 @@ describe.skipIf(!enabled)('visual (headless)', () => {
   }, 240_000);
   afterAll(async () => {
     await client?.close();
-    proj.cleanup();
+    await proj.cleanup();
   });
 
   it('creates a visual shader graph and reads it back', async () => {
@@ -171,7 +171,7 @@ describe.skipIf(!enabled)('visual (editor)', () => {
     } catch {
       // the editor never came up
     }
-    proj.cleanup();
+    await proj.cleanup();
   });
 
   it('applies a layout preset as an editor edit and saves it', async () => {

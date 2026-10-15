@@ -70,7 +70,7 @@ describe.skipIf(!enabled)('code tools: private LSP editor', () => {
   }, 240_000);
   afterAll(async () => {
     await client?.close();
-    proj.cleanup();
+    await proj.cleanup();
   });
 
   it('reports errors and warnings of a broken script (starting the private editor)', async () => {
@@ -230,8 +230,8 @@ describe.skipIf(!enabled)('code tools: connected editor', () => {
     } catch {
       // the editor never came up
     }
-    proj.cleanup();
-    removeDir(config);
+    await proj.cleanup();
+    await removeDir(config);
   });
 
   it('reports the editor language server port in session.json', () => {

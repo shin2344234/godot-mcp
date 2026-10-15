@@ -29,7 +29,7 @@ describe.skipIf(!enabled)('scene extras: headless', () => {
   }, 240_000);
   afterAll(async () => {
     await client?.close();
-    proj.cleanup();
+    await proj.cleanup();
   });
 
   it('node.instance saves a linked sub-scene with Editable Children', async () => {
@@ -180,7 +180,7 @@ describe.skipIf(!enabled)('scene extras: editor', () => {
     } catch {
       // the editor never came up
     }
-    proj.cleanup();
+    await proj.cleanup();
   });
 
   it('instances, reorders and groups through the editor, then saves', async () => {

@@ -64,7 +64,7 @@ describe.skipIf(!enabled)('export tools (headless)', () => {
   }, 240_000);
   afterAll(async () => {
     await client?.close();
-    proj.cleanup();
+    await proj.cleanup();
   });
 
   it('export.presets reports a project without presets', async () => {
@@ -166,7 +166,7 @@ describe.skipIf(!enabled)('export tools (editor open)', () => {
     } catch {
       // the editor never came up
     }
-    proj.cleanup();
+    await proj.cleanup();
   });
 
   it('export.preset_set writes the file and asks the editor to reload its presets', async () => {

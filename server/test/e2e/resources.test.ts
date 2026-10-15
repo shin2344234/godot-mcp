@@ -31,7 +31,7 @@ describe.skipIf(!enabled)('resources (headless)', () => {
   }, 240_000);
   afterAll(async () => {
     await client?.close();
-    proj.cleanup();
+    await proj.cleanup();
   });
 
   it('reads non-default properties, embedded sub-resources and the uid', async () => {
@@ -149,7 +149,7 @@ describe.skipIf(!enabled)('resources (editor)', () => {
     } catch {
       // the editor never came up
     }
-    proj.cleanup();
+    await proj.cleanup();
   });
 
   it('sets properties on the cached resource as an undoable edit and saves', async () => {

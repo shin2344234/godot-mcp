@@ -29,7 +29,7 @@ describe.skipIf(!GODOT_BIN)('animation (headless)', () => {
   }, 240_000);
   afterAll(async () => {
     await client?.close();
-    proj.cleanup();
+    await proj.cleanup();
   });
 
   it('reads the player (auto-found) and one animation\'s keys', async () => {
@@ -177,7 +177,7 @@ describe.skipIf(!GODOT_BIN)('animation (editor)', () => {
     } catch {
       // the editor never came up
     }
-    proj.cleanup();
+    await proj.cleanup();
   });
 
   it('edits animations in the live editor and saves them with the scene', async () => {

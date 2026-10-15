@@ -29,7 +29,7 @@ describe.skipIf(!enabled)('signals: headless', () => {
   }, 240_000);
   afterAll(async () => {
     await client?.close();
-    proj.cleanup();
+    await proj.cleanup();
   });
 
   it('lists saved connections compactly', async () => {
@@ -136,7 +136,7 @@ describe.skipIf(!enabled)('signals: editor', () => {
     } catch {
       // the editor never came up
     }
-    proj.cleanup();
+    await proj.cleanup();
   });
 
   it('connects (creating the stub in a non-tool script), disconnects and saves', async () => {

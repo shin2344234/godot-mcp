@@ -25,7 +25,7 @@ describe.skipIf(!GODOT_BIN)('audio (headless)', () => {
   }, 240_000);
   afterAll(async () => {
     await client?.close();
-    proj.cleanup();
+    await proj.cleanup();
   });
 
   it('reads the default layout (Master only, no file yet)', async () => {
@@ -109,7 +109,7 @@ describe.skipIf(!GODOT_BIN)('audio (editor)', () => {
     } catch {
       // the editor never came up
     }
-    proj.cleanup();
+    await proj.cleanup();
   });
 
   it('changes the live AudioServer and saves the layout file', async () => {
