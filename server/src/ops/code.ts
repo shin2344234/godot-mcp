@@ -153,6 +153,9 @@ export const codeDiagnostics = defineOp({
 
     const extra = { ...(truncated ? { truncated: `only the first ${MAX_DIAG_FILES} files were checked` } : {}), ...(skippedAddons ? { note: 'addons/ was skipped; pass it explicitly to check it' } : {}) };
 
+    // Don't start an editor just to report that a folder has no scripts.
+    if (files.length === 0) return { data: { checked: 0, errors: 0, warnings: 0, files: [], clean: [], ...extra } };
+
     let session: LspSession | undefined;
     let lspError: string | undefined;
     try {

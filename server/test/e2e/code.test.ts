@@ -241,6 +241,20 @@ describe.skipIf(!enabled)('code tools: connected editor', () => {
     expect(existsSync(path.join(proj.dir, '.godot', 'godot_mcp', 'lsp_session.json'))).toBe(false);
   }, 90_000);
 
+  it('falls back to script.validate when the language server is unreachable', async () => {
+    // A second server whose LSP port points at nothing; the bridge itself still works.
+    const deadPort = await freePort();
+    const second = await startServer({ project: proj.dir, era: 'legacy', env: { XDG_CONFIG_HOME: config, GODOT_MCP_LSP_PORT: String(deadPort) } });
+    try {
+      const d = json(await second.callTool({ name: 'godot_code_diagnostics', arguments: { paths: ['res://broken.gd'] } }));
+      expect(d.source).toMatch(/^script\.validate \(language server unavailable: .*not reachable on 127\.0\.0\.1:\d+/);
+      expect(d.errors).toBeGreaterThanOrEqual(1);
+      expect(errorText(await second.callTool({ name: 'godot_code_symbols', arguments: { path: 'res://player.gd' } }))).toMatch(/GODOT_MCP_LSP_PORT/);
+    } finally {
+      await second.close();
+    }
+  }, 90_000);
+
   it('renames through the editor language server and refreshes the editor', async () => {
     const r = json(await call('godot_code_rename', { path: 'res://game_state.gd', line: 5, symbol: 'score_changed', new_name: 'points_changed' }));
     expect(r.applied).toBe(true);
