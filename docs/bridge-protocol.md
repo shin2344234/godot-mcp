@@ -174,6 +174,14 @@ property's declared `type` (and `hint`/`hint_string` for objects) from
 
 ## 5. Methods (step 1)
 
+Step 2 methods are registered by the area modules in `addons/godot_mcp/ops/` and documented per area:
+[scenes, nodes, signals and batches](methods/scene-signals.md),
+[resources, visual authoring and import](methods/resources-visual-import.md),
+[animation and audio](methods/animation-audio.md),
+[tile maps and navigation](methods/world.md),
+[project settings and export](methods/project-export.md),
+[code intelligence and docs](methods/code-docs.md) (these two run in the TypeScript server, not over the bridge).
+
 Methods marked **(E)** are editor-only; **(E/H)** work in both editor and headless.
 In the editor, every scene mutation goes through `EditorUndoRedoManager` as one named
 action (`"MCP: <method>"`) so the user can Ctrl+Z it, and marks the scene unsaved. In
