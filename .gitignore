@@ -4,3 +4,5 @@ dist/
 *.log
 # Godot cache inside the sample project
 examples/**/.godot/
+# Godot Asset Store upload built by scripts/build-addon-zip.mjs
+dist-addon/

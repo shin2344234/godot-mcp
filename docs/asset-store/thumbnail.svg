@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <!-- Godot Asset Store listing thumbnail (16:9, required by https://store.godotengine.org/guidelines/).
+       Source of truth; render the PNG with scripts/render-store-thumbnail.sh.
+       Left: an agent's chat/terminal window. Middle: the localhost bridge. Right: the editor's
+       scene tree. Deliberately no Godot logo and little text, per the thumbnail guidelines. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1b2433"/>
+      <stop offset="1" stop-color="#0f1520"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="720" fill="url(#bg)"/>
+
+  <!-- Agent window (left) -->
+  <g transform="translate(110 150)">
+    <rect width="330" height="300" rx="22" fill="#26324a" stroke="#3d4f70" stroke-width="4"/>
+    <rect width="330" height="56" rx="22" fill="#33425f"/>
+    <rect y="34" width="330" height="22" fill="#33425f"/>
+    <circle cx="34" cy="28" r="9" fill="#ff6b6b"/>
+    <circle cx="62" cy="28" r="9" fill="#ffd166"/>
+    <circle cx="90" cy="28" r="9" fill="#5ad19a"/>
+    <!-- prompt chevron and "typed" lines -->
+    <path d="M36 112 l26 22 l-26 22" fill="none" stroke="#5ad19a" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="84" y="124" width="200" height="20" rx="10" fill="#8ea3c7"/>
+    <rect x="36" y="184" width="250" height="20" rx="10" fill="#5b6f94"/>
+    <rect x="36" y="228" width="180" height="20" rx="10" fill="#5b6f94"/>
+  </g>
+
+  <!-- Bridge (middle): two-way link with a lock for the token -->
+  <g stroke="#478cbf" stroke-width="12" stroke-linecap="round" fill="none">
+    <path d="M470 270 H810"/>
+    <path d="M785 244 L812 270 L785 296"/>
+    <path d="M810 340 H470"/>
+    <path d="M495 314 L468 340 L495 366"/>
+  </g>
+  <g transform="translate(600 150)">
+    <path d="M22 26 V14 a18 18 0 0 1 36 0 V26" fill="none" stroke="#e0e6f0" stroke-width="9"/>
+    <rect x="6" y="20" width="68" height="52" rx="10" fill="#e0e6f0"/>
+    <circle cx="40" cy="42" r="8" fill="#1b2433"/>
+    <rect x="36" y="44" width="8" height="16" rx="3" fill="#1b2433"/>
+  </g>
+
+  <!-- Scene tree (right) -->
+  <g transform="translate(840 150)">
+    <rect width="330" height="300" rx="22" fill="#26324a" stroke="#3d4f70" stroke-width="4"/>
+    <g stroke="#5b6f94" stroke-width="6" fill="none">
+      <path d="M70 92 V236"/>
+      <path d="M70 142 H112"/>
+      <path d="M70 190 H112"/>
+      <path d="M70 236 H112"/>
+      <path d="M150 190 V218 H186"/>
+    </g>
+    <rect x="46" y="62" width="48" height="48" rx="12" fill="#478cbf"/>
+    <rect x="112" y="122" width="40" height="40" rx="10" fill="#5ad19a"/>
+    <rect x="112" y="170" width="40" height="40" rx="10" fill="#ffd166"/>
+    <rect x="186" y="200" width="36" height="36" rx="9" fill="#ff8c69"/>
+    <rect x="112" y="216" width="40" height="40" rx="10" fill="#b48cff"/>
+    <rect x="110" y="74" width="170" height="22" rx="11" fill="#8ea3c7"/>
+    <rect x="170" y="132" width="120" height="20" rx="10" fill="#5b6f94"/>
+    <rect x="240" y="208" width="60" height="20" rx="10" fill="#5b6f94"/>
+  </g>
+
+  <!-- Name -->
+  <text x="640" y="590" text-anchor="middle" font-family="DejaVu Sans, Arial, Helvetica, sans-serif"
+        font-size="84" font-weight="bold" fill="#e0e6f0">Godot MCP</text>
+</svg>
