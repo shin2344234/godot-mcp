@@ -167,8 +167,12 @@ params: `{ "preset"?: name | index, "set"?: { key: value }, "create"?: { "name",
   `GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD`). Other secret-looking keys need
   `allow_secrets: true`; their values are never echoed.
 * `create` appends `[preset.N]` with the defaults `EditorExport::_save` writes for a new
-  preset plus `custom_template/debug|release = ""` in the options section; the platform's
-  other options take their defaults when Godot loads it (verified: CLI exports work).
+  preset, and an options section with **every option of the platform and its default**,
+  as the editor writes it, so documented keys (`binary_format/embed_pck`, ...) can be set
+  in the same call. No script API lists a platform's options outside the editor, so they
+  come from `core/export_defaults.cfg`, generated from a headless editor by
+  `scripts/gen-export-defaults.sh` (rerun it when the targeted Godot version changes).
+  Secret options are not in it (Godot keeps them in `export_credentials.cfg`).
   Platforms: Linux, Windows Desktop, macOS, Android, iOS, visionOS, Web (aliases accepted).
 * The file is written with `ConfigFile` (the editor's own format). In the editor, no
   script API exposes EditorExport's in-memory presets, so the editor is made to reload

@@ -109,6 +109,15 @@ describe.skipIf(!enabled)('export tools (headless)', () => {
     expect(created.created).toBe(true);
     expect(created.preset).toMatchObject({ index: 1, name: 'Web', platform: 'Web', export_path: 'build/web/index.html' });
     expect(presetsFile(proj.dir)).toContain('[preset.1]\n\nname="Web"\nplatform="Web"');
+    // A new preset has every platform option with its default (export_defaults.cfg), so
+    // documented keys work in the same call (MCP_TEST_LOG: embed_pck was rejected).
+    expect(presetsFile(proj.dir)).toContain('variant/thread_support=false');
+    const linux = json(
+      await call('godot_export_preset_set', { create: { name: 'Linux ARM', platform: 'Linux' }, set: { 'binary_format/embed_pck': true, 'binary_format/architecture': 'arm64' } }),
+    );
+    expect(linux.changed).toEqual({ 'options/binary_format/embed_pck': true, 'options/binary_format/architecture': 'arm64' });
+    expect(presetsFile(proj.dir)).toMatch(/\[preset\.2\.options\][^[]*texture_format\/s3tc_bptc=true[^[]*binary_format\/architecture="arm64"/);
+    expect(errorText(await call('godot_export_preset_set', { preset: 'Linux ARM', set: { 'binary_format/embedpck': true } }))).toContain('Did you mean');
 
     expect(errorText(await call('godot_export_preset_set', { create: { name: 'Web', platform: 'Web' } }))).toContain('already exists');
     expect(errorText(await call('godot_export_preset_set', { create: { name: 'X', platform: 'Amiga' } }))).toContain('Valid platforms');
