@@ -5,7 +5,8 @@
 
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,15 +21,18 @@ const TSX = path.join(SERVER_ROOT, 'node_modules', '.bin', 'tsx');
 export const GODOT_BIN = process.env.GODOT_BIN ?? process.env.GODOT_PATH;
 
 /**
- * Delete a temp project folder.
+ * Delete a temp folder (async: await it in afterAll).
  *
- * On Windows a Godot process we just killed can keep file handles open for a
- * moment, so a plain rmSync fails with EPERM/EBUSY. Node's rmSync retries
- * those errors when maxRetries is set (with linear backoff), which covers the
- * gap without slowing down Linux/macOS, where the first attempt succeeds.
+ * On Windows, deleting a project right after the Godot editor that used it exits fails with
+ * EPERM for a few seconds, even when no process visibly holds a handle (verified on
+ * Windows 11 with Godot 4.7.2 and Node 24.19). Node's retry options cover that gap, but only
+ * in fs.promises.rm: since Node 23 fs.rmSync is implemented in C++ and, on Windows, threw
+ * this EPERM at once without retrying, while fs.promises.rm with the same options retried
+ * and succeeded after about 3 s. On Linux/macOS the first attempt succeeds, so this costs
+ * nothing there. Linear backoff: 200 ms, 400 ms, ... (about 11 s in total).
  */
-export function removeDir(dir: string): void {
-  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+export async function removeDir(dir: string): Promise<void> {
+  await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }
 
 /**
@@ -54,7 +58,19 @@ export async function killAndWait(pid: number, timeoutMs = 10_000): Promise<void
 
 export type Era = 'legacy' | 'modern';
 
-export async function startServer(opts: { project: string; era?: Era; env?: Record<string, string>; args?: string[] }) {
+export interface StartOptions {
+  project: string;
+  era?: Era;
+  env?: Record<string, string>;
+  args?: string[];
+  /**
+   * Make the test client declare form elicitation and answer every
+   * elicitation/create with this function (e.g. accept or decline).
+   */
+  onElicit?: (message: string) => { action: 'accept' | 'decline' | 'cancel'; content?: Record<string, unknown> };
+}
+
+export async function startServer(opts: StartOptions) {
   const transport = new StdioClientTransport({
     command: TSX,
     args: [path.join(SERVER_ROOT, 'src', 'index.ts'), '--project', opts.project, ...(opts.args ?? [])],
@@ -63,14 +79,21 @@ export async function startServer(opts: { project: string; era?: Era; env?: Reco
   });
   const client = new Client(
     { name: 'godot-mcp-tests', version: '0.0.0' },
-    opts.era === 'modern' ? { versionNegotiation: { mode: { pin: '2026-07-28' } } } : {},
+    {
+      ...(opts.era === 'modern' ? { versionNegotiation: { mode: { pin: '2026-07-28' as const } } } : {}),
+      ...(opts.onElicit ? { capabilities: { elicitation: { form: {} } } } : {}),
+    },
   );
+  if (opts.onElicit) {
+    const answer = opts.onElicit;
+    client.setRequestHandler('elicitation/create', async (req) => answer(String((req.params as { message?: string }).message ?? '')) as never);
+  }
   await client.connect(transport);
   return client;
 }
 
 /** A throwaway project folder with just a project.godot (no Godot needed). */
-export function makeMiniProject(): { dir: string; cleanup: () => void } {
+export function makeMiniProject(): { dir: string; cleanup: () => Promise<void> } {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'godot-mcp-mini-'));
   writeFileSync(
     path.join(dir, 'project.godot'),
@@ -98,9 +121,12 @@ export function makeMiniProject(): { dir: string; cleanup: () => void } {
 }
 
 /** Copy the sample project (with the addon synced in) to a temp folder. */
-export function copySampleProject(): { dir: string; cleanup: () => void } {
+export function copySampleProject(): { dir: string; cleanup: () => Promise<void> } {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'godot-mcp-sample-'));
-  cpSync(SAMPLE_PROJECT, dir, { recursive: true });
+  // Skip the sample's local .godot/ import cache (left by scripts/test-gdscript.sh): it can
+  // be stale (e.g. missing newly added assets), and a fresh copy is what users have after
+  // cloning. The server imports a project without .godot/ by itself.
+  cpSync(SAMPLE_PROJECT, dir, { recursive: true, filter: (src) => path.basename(src) !== '.godot' });
   // The addon lives at the repo root; the sample project gets a copy.
   cpSync(path.join(REPO_ROOT, 'addons', 'godot_mcp'), path.join(dir, 'addons', 'godot_mcp'), { recursive: true });
   return { dir, cleanup: () => removeDir(dir) };

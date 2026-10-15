@@ -57,3 +57,23 @@ export async function requireSceneForHeadless(ctx: OpContext, scene: string | un
     'The editor is not connected, so pass "scene" (a res:// path to a .tscn) to say which scene file to work on.',
   );
 }
+
+export interface ForwardOptions extends CallOptions {
+  /**
+   * The headless implementation works on one scene file and needs `scene`
+   * (scene_mutation / scene_read methods). Checked up front so the model gets
+   * a clear error instead of a slow generic failure from Godot.
+   */
+  needsScene?: boolean;
+}
+
+/**
+ * Standard operation body: route `method` to the editor or headless Godot and
+ * return its result tagged with the backend that ran it. Most step 2
+ * operations are just `run: (args, ctx) => forwardOp(ctx, 'x.y', args, {...})`.
+ */
+export async function forwardOp(ctx: OpContext, method: string, args: Record<string, unknown>, opts: ForwardOptions = {}) {
+  if (opts.needsScene && !opts.editorOnly) await requireSceneForHeadless(ctx, args.scene as string | undefined);
+  const { result, backend } = await callGodot(ctx, method, args, opts);
+  return { data: { ...(result as object), backend } };
+}

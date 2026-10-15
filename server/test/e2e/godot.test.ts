@@ -13,7 +13,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { copySampleProject, GODOT_BIN, json, killAndWait, startServer } from './helpers.js';
+import { copySampleProject, errorText, GODOT_BIN, json, killAndWait, startServer } from './helpers.js';
 
 const enabled = Boolean(GODOT_BIN);
 
@@ -32,7 +32,7 @@ describe.skipIf(!enabled)('headless backend', () => {
   }, 240_000);
   afterAll(async () => {
     await client?.close();
-    proj.cleanup();
+    await proj.cleanup();
   });
 
   it('reports headless as the scene backend', async () => {
@@ -65,6 +65,25 @@ describe.skipIf(!enabled)('headless backend', () => {
 
     json(await client.callTool({ name: 'godot_node_remove', arguments: { scene: 'res://main.tscn', path: 'McpSprite' } }));
     expect(readFileSync(path.join(proj.dir, 'main.tscn'), 'utf8')).not.toContain('McpSprite');
+  }, 120_000);
+
+  it('sets nested properties (sub-resource fields and vector components)', async () => {
+    json(
+      await client.callTool({
+        name: 'godot_node_add',
+        arguments: { scene: 'res://main.tscn', parent: '.', type: 'Sprite2D', name: 'Nested', properties: { material: { new: 'CanvasItemMaterial' } } },
+      }),
+    );
+    const set = json(
+      await client.callTool({ name: 'godot_node_set', arguments: { scene: 'res://main.tscn', path: 'Nested', properties: { 'material:blend_mode': 'add', 'position:x': 7 } } }),
+    );
+    expect(set.changed['position:x']).toBe(7);
+    const got = json(await client.callTool({ name: 'godot_node_get', arguments: { scene: 'res://main.tscn', path: 'Nested', properties: ['position'] } }));
+    expect(got.properties.position).toBe('Vector2(7, 0)');
+    // CanvasItemMaterial.BLEND_MODE_ADD == 1, saved inside the scene's sub-resource.
+    expect(readFileSync(path.join(proj.dir, 'main.tscn'), 'utf8')).toMatch(/blend_mode = 1/);
+    const bad = await client.callTool({ name: 'godot_node_set', arguments: { scene: 'res://main.tscn', path: 'Nested', properties: { 'texture:width': 3 } } });
+    expect(errorText(bad)).toMatch(/texture.*empty|has no sub-properties|not found/i);
   }, 120_000);
 
   it('creates a scene and validates scripts', async () => {
@@ -118,7 +137,7 @@ describe.skipIf(!enabled)('editor backend', () => {
     } catch {
       // no session file: the editor never came up
     }
-    proj.cleanup();
+    await proj.cleanup();
   });
 
   it('routes scene edits through the live editor and saves', async () => {
@@ -135,6 +154,18 @@ describe.skipIf(!enabled)('editor backend', () => {
     json(await client.callTool({ name: 'godot_scene_save', arguments: {} }));
     expect(readFileSync(path.join(proj.dir, 'main.tscn'), 'utf8')).toContain('McpLabel');
   }, 120_000);
+
+  it('keeps the editor connection when a command-line import runs on the same project', async () => {
+    // `godot --import` / `--export-*` start a throwaway editor that loads our plugin; it must
+    // not overwrite or delete the real editor's session file.
+    const sessionFile = path.join(proj.dir, '.godot', 'godot_mcp', 'session.json');
+    const before = readFileSync(sessionFile, 'utf8');
+    importProject(proj.dir);
+    expect(existsSync(sessionFile)).toBe(true);
+    expect(readFileSync(sessionFile, 'utf8')).toBe(before);
+    const status = json(await client.callTool({ name: 'godot_status', arguments: {} }));
+    expect(status.editor_connected).toBe(true);
+  }, 240_000);
 
   it('reads editor logs', async () => {
     const logs = json(await client.callTool({ name: 'godot_editor_logs', arguments: {} }));

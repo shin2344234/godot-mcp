@@ -23,7 +23,8 @@
     "test": "vitest run",
     "test:unit": "vitest run test/unit",
     "test:e2e": "vitest run test/e2e",
-    "prepack": "npm run build && node scripts/copy-addon.mjs"
+    "prepack": "npm run build && node scripts/copy-addon.mjs",
+    "gen:gdscript-docs": "node scripts/gen-gdscript-docs.mjs"
   },
   "keywords": [
     "mcp",

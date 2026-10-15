@@ -75,11 +75,49 @@ func release_direct() -> void:
 			obj.free()
 
 
+## Run the "undo" operations directly, in their recorded order. Used to roll back a
+## change that was applied with apply_direct() (batch planning, failed batches).
+func apply_undo_direct() -> void:
+	for op: Dictionary in _undo_ops:
+		var obj: Object = op["object"]
+		if not is_instance_valid(obj):
+			continue
+		match op["kind"]:
+			"method":
+				obj.callv(op["method"], op["args"])
+			"property":
+				obj.set(op["property"], op["value"])
+
+
+## After apply_direct() + apply_undo_direct(), nodes this change created are detached
+## orphans with no undo history to own them: free them.
+func free_created_direct() -> void:
+	for op: Dictionary in _do_ops:
+		if op["kind"] != "reference":
+			continue
+		var obj: Object = op["object"]
+		if is_instance_valid(obj) and obj is Node and (obj as Node).get_parent() == null:
+			obj.free()
+
+
+## Fill this (empty) ChangeSet so it is equivalent to applying `sets` in order: all "do"
+## operations in order, and the "undo" operations of the last set first (each set's own
+## undo order kept), so undoing reverses dependent changes correctly. Used by batches.
+func absorb_in_order(sets: Array) -> void:
+	for cs: Variant in sets:
+		_do_ops.append_array(cs._do_ops)
+	for i: int in range(sets.size() - 1, -1, -1):
+		_undo_ops.append_array(sets[i]._undo_ops)
+
+
 ## Editor: register everything as one undoable action and execute it.
 ## `undo_redo` is the EditorUndoRedoManager; `context` (the edited scene root) makes sure
 ## the action lands in that scene's history rather than the global one.
+## Every MCP call is its own undo step (UndoRedo.MERGE_DISABLE). Batches don't use
+## MERGE_ALL: in 4.7.2 it only merges same-name actions created within 800 ms and replays
+## merged undo steps first-to-last, which breaks dependent ops (add, then reparent) and
+## could fuse two quick batches. scene_batch.gd builds one combined ChangeSet instead.
 func commit_to_undo_redo(undo_redo: Object, action_name: String, context: Object) -> void:
-	# 0 = UndoRedo.MERGE_DISABLE: every MCP call is its own undo step.
 	undo_redo.call("create_action", action_name, 0, context)
 	for op: Dictionary in _do_ops:
 		match op["kind"]:

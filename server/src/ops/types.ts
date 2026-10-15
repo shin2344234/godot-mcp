@@ -15,10 +15,32 @@ import type { Config } from '../config.js';
 import type { HeadlessRunner } from '../godot/headless.js';
 import type { RunManager } from '../godot/runs.js';
 
-/** Tool groups, selectable with GODOT_MCP_TOOLSETS. */
-export type Group = 'core' | 'files' | 'scene' | 'node' | 'script' | 'run' | 'editor';
+/**
+ * Tool groups, selectable with GODOT_MCP_TOOLSETS. Step 1 shipped the first
+ * seven; step 2 (full editor authoring) added the rest.
+ */
+export const ALL_GROUPS = [
+  'core',
+  'files',
+  'scene',
+  'node',
+  'script',
+  'run',
+  'editor',
+  'signal', // signal connections in scenes
+  'resource', // .tres/.res resources, dependencies, UIDs
+  'visual', // visual shaders, Control layout, shader checks
+  'anim', // AnimationPlayer / AnimationTree
+  'world', // TileMapLayer, GridMap, TileSet, navigation
+  'audio', // audio bus layout
+  'project', // project settings, input map, autoloads, plugins, validation
+  'import', // import options and reimport
+  'export', // export presets and builds
+  'code', // GDScript language server: diagnostics, symbols, lookups, rename
+  'docs', // offline Godot class reference
+] as const;
 
-export const ALL_GROUPS: readonly Group[] = ['core', 'files', 'scene', 'node', 'script', 'run', 'editor'];
+export type Group = (typeof ALL_GROUPS)[number];
 
 /** Shared services an operation can use. */
 export interface OpContext {
@@ -28,6 +50,12 @@ export interface OpContext {
   runs: RunManager;
   /** Abort signal from the MCP request (client cancelled). */
   signal?: AbortSignal;
+  /**
+   * Report progress on a long operation (exports, reimports, docs index
+   * builds). A no-op when the client didn't ask for progress. `total` may be
+   * omitted when unknown.
+   */
+  progress?: (progress: number, total?: number, message?: string) => void;
 }
 
 /** What an operation returns: JSON for the model, plus optional images. */
@@ -59,6 +87,15 @@ export interface Operation<S extends z.ZodObject = z.ZodObject> {
   core?: boolean;
   /** Ask Claude Code to load this tool up front even when it defers MCP tools. */
   alwaysLoad?: boolean;
+  /**
+   * Ask the user before running this call. Return the question to show (e.g.
+   * "Delete res://old.gd? This cannot be undone.") or undefined to skip.
+   * When the client supports elicitation the server shows it as a yes/no
+   * dialog and only runs the operation if the user agrees; otherwise the
+   * client's own permission prompt (driven by destructiveHint) is the guard.
+   * Reserve it for work that can't be undone. See src/mcp/confirm.ts.
+   */
+  confirm?: (args: z.infer<S>, ctx: OpContext) => string | undefined | Promise<string | undefined>;
   run(args: z.infer<S>, ctx: OpContext): Promise<OpResult>;
 }
 

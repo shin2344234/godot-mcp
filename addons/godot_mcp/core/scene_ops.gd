@@ -383,6 +383,14 @@ static func plan_node_set(root: Node, params: Variant) -> Dictionary:
 		var pname: String = str(key)
 		if pname == "name":
 			return R.err(R.BAD_PARAMS, "node.set: use node.rename to change a node's name (it checks for sibling name conflicts).")
+		if pname.contains(":"):
+			# Nested path into a sub-resource or a vector component, e.g.
+			# "material:albedo_color" or "position:x" (Object.set_indexed syntax).
+			var nested: Dictionary = _decode_nested(root, node, pname, props[key], label)
+			if R.is_err(nested):
+				return nested
+			new_values[pname] = nested["value"]
+			continue
 		if Codec.find_property(node, pname).is_empty():
 			return Codec.unknown_property_error(node, pname, label)
 		var r: Dictionary = Codec.decode_property(node, pname, props[key], root)
@@ -391,13 +399,18 @@ static func plan_node_set(root: Node, params: Variant) -> Dictionary:
 		new_values[pname] = r["value"]
 	var cs := ChangeSet.new()
 	for pname: String in new_values:
-		cs.do_property(node, pname, new_values[pname])
-		cs.undo_property(node, pname, node.get(pname))
+		if pname.contains(":"):
+			var np := NodePath(pname)
+			cs.do_method(node, &"set_indexed", [np, new_values[pname]])
+			cs.undo_method(node, &"set_indexed", [np, node.get_indexed(np)])
+		else:
+			cs.do_property(node, pname, new_values[pname])
+			cs.undo_property(node, pname, node.get(pname))
 	var finish := func() -> Dictionary:
 		var changed: Dictionary = {}
 		var warnings: Array[String] = []
 		for pname: String in new_values:
-			var now: Variant = node.get(pname)
+			var now: Variant = node.get_indexed(NodePath(pname))
 			changed[pname] = Codec.encode(now, root)
 			var wanted: Variant = new_values[pname]
 			if typeof(now) == typeof(wanted) and now != wanted and not (wanted is Object):
@@ -407,6 +420,50 @@ static func plan_node_set(root: Node, params: Variant) -> Dictionary:
 			result["warnings"] = warnings
 		return result
 	return _plan(cs, finish)
+
+
+## Validates and decodes one nested property path for node.set ("material:albedo_color",
+## "shape:size", "position:x"). Every step but the last must be an existing property
+## holding a sub-resource (or, for the final step, a vector/color value whose component
+## is set). Returns {"value": decoded} or an error.
+##
+## Sub-resources saved as their own file (res://x.tres) are refused: the change would
+## silently alter every scene sharing that file, and headless it would not be saved at
+## all (only the scene is written). Those go through resource.set instead.
+static func _decode_nested(root: Node, node: Node, pname: String, value: Variant, label: String) -> Dictionary:
+	var parts: PackedStringArray = pname.split(":", false)
+	if parts.size() < 2:
+		return R.err(R.BAD_PARAMS, "node.set: '%s' is not a valid property path; use \"property:sub_property\", e.g. \"material:albedo_color\"." % pname)
+	var obj: Object = node
+	var walked: String = ""
+	for i: int in parts.size() - 1:
+		var part: String = parts[i]
+		if Codec.find_property(obj, part).is_empty():
+			return Codec.unknown_property_error(obj, part, label if obj == node else "'%s' (%s)" % [walked, obj.get_class()])
+		var sub: Variant = obj.get(part)
+		walked = part if walked.is_empty() else walked + ":" + part
+		if sub is Object and sub != null:
+			obj = sub
+			if obj is Resource:
+				var rpath: String = (obj as Resource).resource_path
+				if not rpath.is_empty() and not rpath.contains("::"):
+					return R.err(R.CONFLICT, ("node.set: '%s' is the shared resource file %s, used by everything that references it. " +
+						"Edit it with resource.set (godot_resource_set) on that file, or give this node its own copy first with " +
+						"{\"%s\": {\"new\": \"%s\"}}.") % [walked, rpath, walked, obj.get_class()])
+			continue
+		# Last step on a built-in value: a component like position:x or modulate:a.
+		if i == parts.size() - 2 and sub != null and typeof(sub) in [TYPE_VECTOR2, TYPE_VECTOR2I, TYPE_VECTOR3, TYPE_VECTOR3I, TYPE_VECTOR4, TYPE_VECTOR4I, TYPE_COLOR, TYPE_QUATERNION, TYPE_RECT2, TYPE_RECT2I]:
+			if not (value is float or value is int):
+				return R.err(R.BAD_PARAMS, "node.set: '%s' is one component of a %s, so pass a number." % [pname, type_string(typeof(sub))])
+			return R.value(value)
+		if sub == null:
+			return R.err(R.BAD_PARAMS, ("node.set: '%s' is empty on %s, so '%s' can't be set yet. Create it first, " +
+				"e.g. {\"%s\": {\"new\": \"<ResourceType>\"}}, then set its properties.") % [walked, label, pname, walked])
+		return R.err(R.BAD_PARAMS, "node.set: '%s' holds a %s, which has no sub-properties to set." % [walked, type_string(typeof(sub))])
+	var last: String = parts[parts.size() - 1]
+	if Codec.find_property(obj, last).is_empty():
+		return Codec.unknown_property_error(obj, last, "'%s' (%s)" % [walked, obj.get_class()])
+	return Codec.decode_property(obj, last, value, root)
 
 
 ## node.remove

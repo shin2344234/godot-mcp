@@ -1,0 +1,65 @@
+[gd_scene format=3]
+
+[ext_resource type="Texture2D" path="res://icon.svg" id="1_5kek7"]
+
+[sub_resource type="Animation" id="Animation_2m2g3"]
+loop_mode = 1
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("Sprite2D:modulate")
+tracks/0/interp = 1
+tracks/0/loop_wrap = true
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 0.5),
+"transitions": PackedFloat32Array(1, 1),
+"update": 0,
+"values": [Color(1, 1, 1, 1), Color(1, 1, 1, 0.5)]
+}
+
+[sub_resource type="Animation" id="Animation_mfv2s"]
+length = 0.8
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("Sprite2D:position")
+tracks/0/interp = 1
+tracks/0/loop_wrap = true
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 0.8),
+"transitions": PackedFloat32Array(1, 1),
+"update": 0,
+"values": [Vector2(0, 0), Vector2(32, 0)]
+}
+
+[sub_resource type="AnimationLibrary" id="AnimationLibrary_dj13r"]
+_data = {
+&"idle": SubResource("Animation_2m2g3"),
+&"walk": SubResource("Animation_mfv2s")
+}
+
+[sub_resource type="AnimationNodeAnimation" id="AnimationNodeAnimation_e1wpg"]
+animation = &"idle"
+
+[sub_resource type="AnimationNodeStateMachineTransition" id="AnimationNodeStateMachineTransition_h4oyw"]
+advance_mode = 2
+
+[sub_resource type="AnimationNodeStateMachine" id="AnimationNodeStateMachine_2v4mf"]
+states/Idle/node = SubResource("AnimationNodeAnimation_e1wpg")
+states/Idle/position = Vector2(200, 100)
+transitions = ["Start", "Idle", SubResource("AnimationNodeStateMachineTransition_h4oyw")]
+
+[node name="AnimDemo" type="Node2D" unique_id=670647922]
+
+[node name="Sprite2D" type="Sprite2D" parent="." unique_id=1854066513]
+texture = ExtResource("1_5kek7")
+
+[node name="Rig" type="Node3D" parent="." unique_id=1450381043]
+
+[node name="AnimationPlayer" type="AnimationPlayer" parent="." unique_id=911076831]
+libraries/ = SubResource("AnimationLibrary_dj13r")
+autoplay = &"idle"
+
+[node name="AnimationTree" type="AnimationTree" parent="." unique_id=683988544]
+tree_root = SubResource("AnimationNodeStateMachine_2v4mf")
+anim_player = NodePath("../AnimationPlayer")

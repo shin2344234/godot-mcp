@@ -21,7 +21,7 @@ func handle(method: String, params: Variant) -> Dictionary:
 		params = {}
 	if not params is Dictionary:
 		return R.err(R.BAD_PARAMS, "'params' must be a JSON object.")
-	if method in Methods.EDITOR_ONLY:
+	if Methods.is_editor_only(method):
 		return Methods.editor_only_error(method)
 	match method:
 		"ping":
@@ -42,7 +42,57 @@ func handle(method: String, params: Variant) -> Dictionary:
 	var mutations: Dictionary = Methods.scene_mutations()
 	if mutations.has(method):
 		return _mutate(mutations[method], params)
+	var descriptor: Variant = Methods.module_methods().get(method)
+	if descriptor is Dictionary:
+		return _dispatch_module(method, descriptor, params)
 	return Methods.unknown_method_error(method)
+
+
+## Runs a method registered by an area module (see Methods.MODULES for the kinds).
+func _dispatch_module(method: String, descriptor: Dictionary, params: Dictionary) -> Dictionary:
+	var fn: Callable = descriptor["fn"]
+	match str(descriptor.get("kind", "")):
+		"scene_mutation":
+			return _mutate(fn, params)
+		"scene_read":
+			return _with_scene(params, func(root: Node, _path: String) -> Dictionary:
+				return fn.call(root, params))
+		"project":
+			return fn.call(params, _env())
+	return R.err(R.INTERNAL, "Method '%s' has an unknown descriptor kind '%s' (addon bug)." % [method, descriptor.get("kind")])
+
+
+## The headless counterpart of EditorBackend._env(): same keys, no editor objects.
+##   load_scene  Callable(params) -> {"value": root, "path": path} | error (loads params.scene;
+##               the caller must free the root)
+##   save_scene  Callable(root, path) -> {} on success or an error Dictionary
+##   scene_mutations  method name -> planner Callable(root, params) for every scene
+##               mutation (step 1 and modules); used by batch.apply (core/scene_batch.gd)
+func _env() -> Dictionary:
+	return {
+		"editor": false,
+		"interface": null,
+		"undo_redo": null,
+		"filesystem": null,
+		"plugin": null,
+		"logs": null,
+		"load_scene": _load_scene,
+		"save_scene": SceneOps.pack_and_save,
+		"scene_mutations": _scene_mutation_planners(),
+	}
+
+
+## Every scene-mutation planner: the step 1 ones plus module methods of kind
+## "scene_mutation" (same as EditorBackend.scene_mutation_planners; the editor backend
+## cannot be preloaded here because it references editor-only classes).
+static func _scene_mutation_planners() -> Dictionary:
+	var out: Dictionary = Methods.scene_mutations()
+	var modules: Dictionary = Methods.module_methods()
+	for method: String in modules:
+		var d: Dictionary = modules[method]
+		if str(d.get("kind", "")) == "scene_mutation":
+			out[method] = d["fn"]
+	return out
 
 
 ## scene.save is a no-op headless: every mutation already saved its scene.

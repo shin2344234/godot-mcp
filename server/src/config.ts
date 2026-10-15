@@ -32,6 +32,23 @@ export interface Config {
   headlessTimeoutMs: number;
   /** Timeout for a single editor-bridge request, in ms. */
   bridgeTimeoutMs: number;
+  /**
+   * "elicit" (default): ask the user through the client's elicitation dialog
+   * before irreversible operations, when the client supports it.
+   * "never": don't ask (for unattended runs where nobody can answer, e.g.
+   * `claude -p`, which auto-declines elicitation).
+   */
+  confirm: 'elicit' | 'never';
+  /**
+   * [code area] GDScript language server settings (src/lsp/manager.ts).
+   * `lspPort` overrides the port of the user's editor language server (default: what the
+   * plugin reports, else 6005). Always 127.0.0.1.
+   */
+  lspPort: number | undefined;
+  /** Timeout for one language server request, in ms. */
+  lspTimeoutMs: number;
+  /** Stop the private headless LSP editor after this long without code.* calls, in ms. */
+  lspIdleTimeoutMs: number;
 }
 
 /** Parse `--flag value` / `--flag=value` style args into a map. */
@@ -94,5 +111,9 @@ export function loadConfig(argv: string[] = process.argv.slice(2), env: NodeJS.P
     readOnly: truthy(args.get('read-only') ?? env.GODOT_MCP_READ_ONLY),
     headlessTimeoutMs: Number(env.GODOT_MCP_HEADLESS_TIMEOUT_MS ?? 120_000),
     bridgeTimeoutMs: Number(env.GODOT_MCP_BRIDGE_TIMEOUT_MS ?? 30_000),
+    confirm: (args.get('confirm') ?? env.GODOT_MCP_CONFIRM ?? 'elicit').toLowerCase() === 'never' ? 'never' : 'elicit',
+    lspPort: env.GODOT_MCP_LSP_PORT ? Number(env.GODOT_MCP_LSP_PORT) : undefined,
+    lspTimeoutMs: Number(env.GODOT_MCP_LSP_TIMEOUT_MS ?? 15_000),
+    lspIdleTimeoutMs: Number(env.GODOT_MCP_LSP_IDLE_MS ?? 10 * 60_000),
   };
 }

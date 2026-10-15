@@ -17,6 +17,8 @@ export function buildInstructions(mode: ToolMode): string {
     'Paths are res:// paths. Node paths are relative to the scene root ("." is the root).',
     'Edit scenes through the scene/node tools rather than hand-editing .tscn text. Edit scripts with godot_files_edit / godot_files_write; GDScript is syntax-checked automatically.',
     'To test: godot_run_start (mode "process" captures output), then godot_run_output with level "error".',
+    // Step 2 tools that change how the model should work, not just what it can call.
+    'Several edits to one scene: godot_batch_apply (all-or-nothing, one undo step). Unsure about a Godot class or method: godot_docs_search / godot_docs_class (offline docs for the installed Godot) instead of guessing. GDScript errors and symbols: godot_code_diagnostics, godot_code_lookup.',
   ];
   if (mode === 'compact') {
     lines.push(

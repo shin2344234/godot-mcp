@@ -20,10 +20,13 @@ const ChangeSet := preload("../core/change_set.gd")
 const LogBuffer := preload("../core/log_buffer.gd")
 
 var _logs: LogBuffer
+## The EditorPlugin that owns this backend (for add_autoload_singleton and friends).
+var _plugin: EditorPlugin
 
 
-func _init(logs: LogBuffer) -> void:
+func _init(logs: LogBuffer, plugin: EditorPlugin = null) -> void:
 	_logs = logs
+	_plugin = plugin
 
 
 ## Entry point used by the bridge server. Wraps `_dispatch` with a check for runtime
@@ -81,7 +84,64 @@ func _dispatch(method: String, params: Variant) -> Dictionary:
 	var mutations: Dictionary = Methods.scene_mutations()
 	if mutations.has(method):
 		return _mutate(method, mutations[method], params)
+	var descriptor: Variant = Methods.module_methods().get(method)
+	if descriptor is Dictionary:
+		return _dispatch_module(method, descriptor, params)
 	return Methods.unknown_method_error(method)
+
+
+## Runs a method registered by an area module (see Methods.MODULES for the kinds).
+func _dispatch_module(method: String, descriptor: Dictionary, params: Dictionary) -> Dictionary:
+	var fn: Callable = descriptor["fn"]
+	match str(descriptor.get("kind", "")):
+		"scene_mutation":
+			return _mutate(method, fn, params)
+		"scene_read":
+			var t: Dictionary = _edited_root(params)
+			if R.is_err(t):
+				return t
+			return fn.call(t["value"], params)
+		"project":
+			return fn.call(params, _env())
+	return R.err(R.INTERNAL, "Method '%s' has an unknown descriptor kind '%s' (addon bug)." % [method, descriptor.get("kind")])
+
+
+## What "project" methods get to know about the editor backend. The headless backend
+## builds the same keys with null editor objects (HeadlessBackend._env).
+##   editor       true here, false headless
+##   interface    the EditorInterface singleton
+##   undo_redo    EditorUndoRedoManager (for undoable edits outside a scene planner)
+##   filesystem   EditorFileSystem (update_file / reimport_files / scan after writing files)
+##   plugin       the EditorPlugin (add_autoload_singleton, ...); may be null in tests
+##   logs         the LogBuffer
+##   edited_root  Callable(params) -> {"value": root} | error: the edited scene, opening
+##                params.scene first when given (same rules as scene methods)
+##   scene_mutations  method name -> planner Callable(root, params) for every scene
+##                mutation (step 1 and modules); used by batch.apply (core/scene_batch.gd)
+func _env() -> Dictionary:
+	return {
+		"editor": true,
+		"interface": EditorInterface,
+		"undo_redo": EditorInterface.get_editor_undo_redo(),
+		"filesystem": EditorInterface.get_resource_filesystem(),
+		"plugin": _plugin,
+		"logs": _logs,
+		"edited_root": _edited_root,
+		"scene_mutations": scene_mutation_planners(),
+	}
+
+
+## Every scene-mutation planner: the step 1 ones plus module methods of kind
+## "scene_mutation". Shared with HeadlessBackend through _env() so batch.apply can run any
+## of them.
+static func scene_mutation_planners() -> Dictionary:
+	var out: Dictionary = Methods.scene_mutations()
+	var modules: Dictionary = Methods.module_methods()
+	for method: String in modules:
+		var d: Dictionary = modules[method]
+		if str(d.get("kind", "")) == "scene_mutation":
+			out[method] = d["fn"]
+	return out
 
 
 ## Payload for editor.status (also merged into the bridge's `welcome` frame).

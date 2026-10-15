@@ -21,9 +21,60 @@ const SHARED: PackedStringArray = [
 ]
 
 
+## Area modules (addons/godot_mcp/ops/*.gd), added in step 2. Each one has
+## `static func methods() -> Dictionary` mapping a method name to a descriptor:
+##
+##   {"kind": "scene_mutation", "fn": Callable(root: Node, params) -> {"changes", "finish"} | error}
+##       Planned like node.add: the editor commits the ChangeSet as one undo step on the
+##       edited scene; headless applies it to params.scene and saves the file.
+##   {"kind": "scene_read", "fn": Callable(root: Node, params) -> R.ok(...) | error}
+##       Read-only work on a scene root (edited scene in the editor, params.scene headless).
+##   {"kind": "project", "fn": Callable(params, env: Dictionary) -> R.ok(...) | error}
+##       Anything not tied to one scene (resources, settings, imports...). `env` describes
+##       the backend; see EditorBackend._env() / HeadlessBackend._env() for its keys.
+##
+## Optional descriptor keys: "editor_only": true (headless answers UNSUPPORTED).
+const MODULES: Array = [
+	preload("../ops/scene_extra_ops.gd"),
+	preload("../ops/signal_ops.gd"),
+	preload("../ops/resource_ops.gd"),
+	preload("../ops/visual_ops.gd"),
+	preload("../ops/import_ops.gd"),
+	preload("../ops/anim_ops.gd"),
+	preload("../ops/audio_ops.gd"),
+	preload("../ops/world_ops.gd"),
+	preload("../ops/project_ops.gd"),
+	preload("../ops/export_ops.gd"),
+]
+
+## Built once per process from MODULES (static vars persist for the script's lifetime).
+static var _module_methods: Dictionary = {}
+
+
+## method name -> descriptor, merged from every module.
+static func module_methods() -> Dictionary:
+	if _module_methods.is_empty():
+		for module: Variant in MODULES:
+			var entries: Dictionary = module.methods()
+			for method: String in entries:
+				assert(not _module_methods.has(method), "Godot MCP: method '%s' registered twice" % method)
+				_module_methods[method] = entries[method]
+	return _module_methods
+
+
+## True if the method only works with the live editor (step 1 list or a module flag).
+static func is_editor_only(method: String) -> bool:
+	if method in EDITOR_ONLY:
+		return true
+	var d: Variant = module_methods().get(method)
+	return d is Dictionary and bool((d as Dictionary).get("editor_only", false))
+
+
 static func all_methods() -> PackedStringArray:
 	var out: PackedStringArray = SHARED.duplicate()
 	out.append_array(EDITOR_ONLY)
+	for method: String in module_methods():
+		out.append(method)
 	return out
 
 
