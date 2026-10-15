@@ -167,16 +167,9 @@ export class DebugState extends EventEmitter {
     this.ready = session.isConnected ? this.probe() : Promise.resolve();
   }
 
-  /**
-   * Breakpoints passed to godot_run_start reach the game as --breakpoints on its command
-   * line. GameRun doesn't keep them, so read them back from the spawned process's
-   * arguments (ChildProcess.spawnargs, public Node API; `child` is private to GameRun).
-   */
+  /** Breakpoints passed to godot_run_start (Godot's --breakpoints), kept on the run. */
   private seedBreakpoints(): void {
-    const args = (this.run as unknown as { child?: { spawnargs?: string[] } }).child?.spawnargs ?? [];
-    const i = args.indexOf('--breakpoints');
-    if (i < 0 || !args[i + 1]) return;
-    for (const spec of args[i + 1]!.split(',')) {
+    for (const spec of this.run.initialBreakpoints) {
       const bp = splitBreakpoint(spec);
       if (bp) this.remember(bp.file, bp.line, true);
     }

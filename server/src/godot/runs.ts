@@ -24,6 +24,7 @@ import { DebugSession, type GameMessage } from '../game/debugSession.js';
 import { injectRuntime, runtimeInstalled } from '../game/override.js';
 import { ProcessTransport, RuntimeChannel } from '../game/runtime.js';
 import { log } from '../log.js';
+import { debugStateFor } from '../game/debugState.js';
 
 export type LineLevel = 'info' | 'warning' | 'error';
 
@@ -101,6 +102,8 @@ export class GameRun {
   private errorSeq = 0;
   /** Channel to the runtime autoload; `channel.ready` resolves when it said hello. */
   readonly channel: RuntimeChannel | undefined;
+  /** Breakpoints passed at launch ("res://a.gd:12"), seeding the debug state's list. */
+  initialBreakpoints: string[] = [];
 
   constructor(
     private readonly child: ChildProcess,
@@ -223,6 +226,10 @@ export class RunManager {
       throw err;
     }
     const run = new GameRun(child, opts.scene ?? 'main', opts.headless, session);
+    run.initialBreakpoints = [...(opts.breakpoints ?? [])];
+    // Track debugger stops from the very first message, so a breakpoint hit before
+    // any debug tool is called is reported with its exact reason (not inferred later).
+    debugStateFor(run);
     if (release) {
       const timer = setTimeout(() => void release(), INJECT_TIMEOUT_MS);
       const done = () => {

@@ -43,8 +43,9 @@ async function fakeGame(reply: (cmd: Cmd, game: { send: (msg: string, data: Enco
   return { session, received, ...game, close };
 }
 
-function fakeRun(spawnargs: string[] = ['godot']): GameRun {
-  return { errors: [], child: { spawnargs } } as unknown as GameRun;
+/** A stand-in GameRun: only the fields DebugState reads. */
+function fakeRun(initialBreakpoints: string[] = []): GameRun {
+  return { errors: [], initialBreakpoints } as unknown as GameRun;
 }
 
 const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
@@ -82,10 +83,10 @@ describe('DebugState', () => {
     cleanup = [];
   });
 
-  it('seeds breakpoints from --breakpoints and sends core:breakpoint as [source, line, set]', async () => {
+  it('seeds breakpoints from the run.start list and sends core:breakpoint as [source, line, set]', async () => {
     const g = await fakeGame();
     cleanup.push(g.close);
-    const s = new DebugState(fakeRun(['godot', '--path', '/p', '--breakpoints', 'res://b.gd:10,res://a.gd:3']), g.session);
+    const s = new DebugState(fakeRun(['res://b.gd:10', 'res://a.gd:3']), g.session);
     await s.ready;
     expect(s.list()).toEqual(['res://a.gd:3', 'res://b.gd:10']);
     s.setBreakpoint('res://a.gd', 12, true);
@@ -150,7 +151,7 @@ describe('DebugState', () => {
       if (cmd[0] === 'get_stack_dump') game.send('stack_dump', STACK);
     });
     cleanup.push(g.close);
-    const s = new DebugState(fakeRun(['godot', '--breakpoints', 'res://a.gd:15']), g.session);
+    const s = new DebugState(fakeRun(['res://a.gd:15']), g.session);
     await s.ready;
     expect(s.stop).toMatchObject({ reason: 'breakpoint', hasStack: true, canStep: true });
     expect((await s.stack()).map((f) => f.line)).toEqual([15, 9]);
