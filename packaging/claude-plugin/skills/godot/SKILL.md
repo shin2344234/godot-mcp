@@ -13,9 +13,9 @@ running game, so they're safer than editing project files as text.
    - Editor connected: edits go through the editor, are undoable by the user, and need
      `godot_scene_save` afterwards.
    - No editor: edits run in headless Godot and are written to disk; pass `scene`.
-   - `addon_installed: false`: scene, node, run and game tools need the addon. Tell the
-     user to run `npx -y @shin2344234/godot-mcp init` in the project folder (it copies
-     `addons/godot_mcp` and enables the plugin), then retry.
+   - `addon_installed: false` (or an `addon_hint`): scene, node, run and game tools need
+     the addon. Call `godot_addon_install` (copies `addons/godot_mcp` and enables the
+     plugin), then retry. If the editor is open, the user restarts it afterwards.
    - Then call `godot_project_info` for the main scene, autoloads and input actions.
 2. **Don't hand-edit `.tscn` or `.tres` files.** Use the scene, node, resource and signal
    tools (`godot_node_add`, `godot_node_set`, `godot_signal_connect`, ...). They keep

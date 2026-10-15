@@ -2,10 +2,13 @@
  * Core operations: what an agent should call first to orient itself.
  */
 
-import { existsSync } from 'node:fs';
+import { cpSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
+import { OpError } from '../errors.js';
 import { findGodot } from '../godot/binary.js';
+import { enablePlugin } from '../init/enablePlugin.js';
+import { findAddonSource } from '../init/init.js';
 import { extractFacts, rawToJson, readProjectSettings } from '../project/projectFile.js';
 import { SERVER_VERSION } from '../version.js';
 import { defineOp } from './types.js';
@@ -51,6 +54,83 @@ export const status = defineOp({
         runs: ctx.runs.list().map((r) => ({ run_id: r.id, scene: r.scene, running: r.running, exit_code: r.exitCode, ...r.counts() })),
         // Tell the agent what will happen for scene edits right now.
         scene_backend: connected ? 'editor (undoable, live)' : ctx.headless.addonInstalled() && godot ? 'headless (edits .tscn files on disk)' : 'unavailable',
+        // Missing or outdated addon: point at the tool that fixes it (clients like
+        // Claude Desktop install the server as a bundle, with no `init` step).
+        ...addonHint(ctx.config.projectPath),
+      },
+    };
+  },
+});
+
+/** plugin.cfg's version="..." (undefined when the file or the key is missing). */
+function addonVersion(dir: string): string | undefined {
+  const cfg = path.join(dir, 'plugin.cfg');
+  if (!existsSync(cfg)) return undefined;
+  return /version="([^"]+)"/.exec(readFileSync(cfg, 'utf8'))?.[1];
+}
+
+/** `addon_hint` for godot_status when the project's addon is missing or older than the bundled one. */
+function addonHint(projectPath: string): { addon_hint?: string } {
+  const src = findAddonSource();
+  if (!src || !existsSync(path.join(projectPath, 'project.godot'))) return {};
+  const installed = addonVersion(path.join(projectPath, 'addons', 'godot_mcp'));
+  const bundled = addonVersion(src);
+  if (!installed) return { addon_hint: 'The Godot MCP addon is not in this project. Install it with godot_addon_install (or run `npx -y @shin2344234/godot-mcp init` in the project folder).' };
+  if (bundled && installed !== bundled) return { addon_hint: `The project's Godot MCP addon is ${installed}; this server ships ${bundled}. Update it with godot_addon_install.` };
+  return {};
+}
+
+/**
+ * Copy the addon bundled with this server into the project and enable it.
+ *
+ * The same thing `godot-mcp init` does for the addon, as a tool: people who
+ * install the server as a Claude Desktop bundle (.mcpb) or a Claude Code
+ * plugin never run the CLI, so without this they'd have no way to get the
+ * editor bridge and the runtime into their project from inside the client.
+ */
+export const addonInstall = defineOp({
+  name: 'addon.install',
+  group: 'core',
+  title: 'Install the editor addon',
+  description:
+    'Godot addon: install or update addons/godot_mcp (the editor bridge and game runtime this server needs) from the copy bundled with the server, and enable it in project.godot.',
+  input: z.object({}),
+  readOnly: false,
+  // Overwrites files under addons/godot_mcp (ours, but possibly locally edited).
+  destructive: true,
+  idempotent: true,
+  confirm: (_args, ctx) => {
+    const installed = addonVersion(path.join(ctx.config.projectPath, 'addons', 'godot_mcp'));
+    return installed ? `Replace the Godot MCP addon ${installed} in addons/godot_mcp with the bundled version? Local edits to those files are lost.` : undefined;
+  },
+  async run(_args, ctx) {
+    const root = ctx.config.projectPath;
+    const projectFile = path.join(root, 'project.godot');
+    if (!existsSync(projectFile)) throw new OpError('NOT_FOUND', `No project.godot in ${root}. Start the server with --project (or GODOT_PROJECT_PATH) pointing at the Godot project folder.`);
+    const src = findAddonSource();
+    if (!src) throw new OpError('NOT_FOUND', 'This server build has no bundled addon. Reinstall the server, or copy addons/godot_mcp from https://github.com/shin2344234/godot-mcp into the project.');
+    const dest = path.join(root, 'addons', 'godot_mcp');
+    const before = addonVersion(dest);
+    const bundled = addonVersion(src);
+    // Running from the repo with --project pointing at the repo itself: nothing to copy.
+    const copied = path.resolve(src) !== path.resolve(dest) && before !== bundled;
+    if (copied) cpSync(src, dest, { recursive: true });
+    const text = readFileSync(projectFile, 'utf8');
+    const next = enablePlugin(text);
+    if (next !== text) writeFileSync(projectFile, next);
+    const editorOpen = await ctx.bridge.ensureConnected().catch(() => false);
+    return {
+      data: {
+        installed_version: bundled,
+        previous_version: before ?? null,
+        copied,
+        plugin_enabled_now: next !== text,
+        // The editor only loads plugin scripts at startup / when the plugin is toggled.
+        note: copied || next !== text
+          ? editorOpen
+            ? 'Restart the Godot editor (or turn the plugin off and on in Project Settings > Plugins) to load the new addon.'
+            : 'Open the project in the Godot editor to start the bridge; headless tools can use the addon right away.'
+          : 'The addon was already installed and enabled.',
       },
     };
   },
