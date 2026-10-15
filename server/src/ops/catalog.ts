@@ -21,6 +21,11 @@ import * as signals from './signals.js';
 import type { Operation } from './types.js';
 import * as visual from './visual.js';
 import * as world from './world.js';
+import * as liveGame from './liveGame.js';
+import * as gameInput from './gameInput.js';
+import * as gameView from './gameView.js';
+import * as debug from './debug.js';
+import * as testing from './testing.js';
 
 /** Every operation, in a fixed order (the spec asks for a deterministic tools/list). */
 export const ALL_OPERATIONS: readonly Operation[] = [
@@ -66,6 +71,12 @@ export const ALL_OPERATIONS: readonly Operation[] = [
   ...exportsOps.operations,
   ...code.operations,
   ...docs.operations,
+  // Step 3: live game and debugging.
+  ...liveGame.operations,
+  ...gameInput.operations,
+  ...gameView.operations,
+  ...debug.operations,
+  ...testing.operations,
 ] as Operation[];
 
 /** Operations enabled by config (toolsets + read-only). */

@@ -45,6 +45,9 @@ const MODULES: Array = [
 	preload("../ops/world_ops.gd"),
 	preload("../ops/project_ops.gd"),
 	preload("../ops/export_ops.gd"),
+	# Step 3.
+	preload("../ops/editor_view_ops.gd"),
+	preload("../ops/editor_ui_ops.gd"),
 ]
 
 ## Built once per process from MODULES (static vars persist for the script's lifetime).

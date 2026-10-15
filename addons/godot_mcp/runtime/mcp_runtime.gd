@@ -38,6 +38,9 @@ const AUTOLOAD_NAME: String = "GodotMcpRuntime"
 ## Area modules. Each worker area adds its module here.
 const MODULES: Array = [
 	preload("ops/rt_core.gd"),
+	preload("ops/rt_live.gd"),
+	preload("ops/rt_input.gd"),
+	preload("ops/rt_view.gd"),
 ]
 
 var _methods: Dictionary = {}

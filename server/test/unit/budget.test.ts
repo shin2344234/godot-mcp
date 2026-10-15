@@ -27,8 +27,11 @@ describe('tool definition budget', () => {
   it('compact mode stays under ~5k tokens', () => {
     expect(estimateTokens('compact')).toBeLessThan(5_000);
   });
-  it('full mode stays under ~15k tokens', () => {
-    expect(estimateTokens('full')).toBeLessThan(15_000);
+  // Step 3 raised this from 15k: the runtime and debug tools add about 14 tools, and
+  // clients with tool search (Claude Code, Codex, Cursor) defer most of them anyway.
+  // Compact mode stays the small option.
+  it('full mode stays under ~17k tokens', () => {
+    expect(estimateTokens('full')).toBeLessThan(17_000);
   });
   it('instructions stay under 2 KB', () => {
     expect(buildInstructions('compact').length).toBeLessThan(2_048);

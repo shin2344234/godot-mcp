@@ -153,3 +153,19 @@ async function ready(ch: RuntimeChannel, run?: GameRun): Promise<RuntimeChannel>
 }
 
 export type { RuntimeHello };
+
+/**
+ * Convenience for runtime tools: resolve the game, call a runtime method and
+ * return its result with the run id added, as an OpResult-style `data`.
+ */
+export async function runtimeCall(
+  ctx: { runs: RunManager; bridge: EditorBridge; signal?: AbortSignal },
+  runId: string | undefined,
+  method: string,
+  params: Record<string, unknown> = {},
+  timeoutMs?: number,
+): Promise<{ data: Record<string, unknown> }> {
+  const game = await resolveGame(ctx, runId);
+  const result = (await game.channel.request(method, params, { timeoutMs, signal: ctx.signal })) as Record<string, unknown>;
+  return { data: { run_id: game.runId, ...result } };
+}

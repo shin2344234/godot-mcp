@@ -3,13 +3,14 @@
  *
  * Two ways to run:
  *   - "editor": ask the open editor to play (same as pressing F5/F6). The
- *     user sees the game; output appears in the editor's Output panel.
- *     (Streaming that output back to the agent arrives with the runtime
- *     bridge in step 3.)
+ *     user sees the game; output appears in the editor's Output panel. The
+ *     runtime tools reach it through the plugin's debugger relay.
  *   - "process": the server starts Godot itself and captures stdout/stderr,
  *     so the agent can read errors with godot_run_output. Can be headless
  *     (no window; good for smoke tests) or windowed.
- * "auto" picks "editor" when it's connected, otherwise "process".
+ * "auto" picks "editor" when it's connected, otherwise "process" (always
+ * "process" when debug or movie options are given). Process runs are debug
+ * sessions with the server as the debugger (src/game/debugSession.ts).
  */
 
 import { spawn } from 'node:child_process';
@@ -40,19 +41,25 @@ export const runStart = defineOp({
     mode: z.enum(['auto', 'editor', 'process']).default('auto'),
     headless: z.boolean().optional().describe('Process mode only: no window. Defaults to true when no display is available.'),
     quit_after_frames: z.number().int().min(1).optional().describe('Process mode only: quit automatically after N frames (handy for smoke tests).'),
+    breakpoints: z.array(z.string()).optional().describe('Process mode: breakpoints set before the first frame, e.g. ["res://player.gd:42"]. Inspect with godot_debug_state.'),
+    break_on_errors: z.boolean().optional().describe('Process mode: stop at script errors like the editor does (default false: errors are recorded, the game keeps running).'),
+    write_movie: z.string().optional().describe('Process mode: record frames to this file with Godot\'s Movie Maker (.avi, or .png for an image sequence), e.g. "user://capture.avi". Needs a window.'),
   }),
   readOnly: false,
   destructive: false,
   core: true,
-  async run({ scene, mode, headless, quit_after_frames }, ctx) {
-    const useEditor = mode === 'editor' || (mode === 'auto' && (await ctx.bridge.ensureConnected()));
+  async run({ scene, mode, headless, quit_after_frames, breakpoints, break_on_errors, write_movie }, ctx) {
+    // Debug and movie options need a process run (the server is that game's debugger).
+    const needsProcess = Boolean(breakpoints?.length || break_on_errors || write_movie);
+    if (mode === 'editor' && needsProcess) throw new OpError('BAD_PARAMS', 'breakpoints, break_on_errors and write_movie work with mode "process" (the server launches and debugs the game itself).');
+    const useEditor = mode === 'editor' || (mode === 'auto' && !needsProcess && (await ctx.bridge.ensureConnected()));
     if (useEditor) {
       const result = await ctx.bridge.request('run.play', { scene: scene ?? 'main' });
       return {
         data: {
           ...(result as object),
           mode: 'editor',
-          note: 'Started in the editor. Game output shows in the editor Output panel; runtime log capture arrives in a later version.',
+          note: 'Started in the editor. godot_game_* tools work on it once its runtime loads; its output shows in the editor Output panel (godot_editor_logs).',
         },
       };
     }
@@ -61,10 +68,14 @@ export const runStart = defineOp({
     const godot = await findGodot(ctx.config.godotPath);
     if (!godot) throw new OpError('GODOT_NOT_FOUND', GODOT_NOT_FOUND_HINT);
     const extraArgs = quit_after_frames ? ['--quit-after', String(quit_after_frames)] : [];
+    if (write_movie) extraArgs.push('--write-movie', write_movie);
+    if (write_movie && (headless ?? !canShowWindow())) throw new OpError('BAD_PARAMS', 'write_movie needs a window (headless: false and a display); headless runs render nothing.');
     const run = await ctx.runs.start(godot.path, ctx.config.projectPath, {
       scene: scene && scene !== 'main' ? scene : undefined,
       headless: headless ?? !canShowWindow(),
       extraArgs,
+      breakpoints,
+      breakOnErrors: break_on_errors,
     });
     // Wait until the runtime says hello (the game is up and runtime tools work), the game
     // exits, or a few seconds pass. Startup errors are captured either way.
