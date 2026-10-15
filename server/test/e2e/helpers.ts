@@ -119,7 +119,10 @@ export function makeMiniProject(): { dir: string; cleanup: () => void } {
 /** Copy the sample project (with the addon synced in) to a temp folder. */
 export function copySampleProject(): { dir: string; cleanup: () => void } {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'godot-mcp-sample-'));
-  cpSync(SAMPLE_PROJECT, dir, { recursive: true });
+  // Skip the sample's local .godot/ import cache (left by scripts/test-gdscript.sh): it can
+  // be stale (e.g. missing newly added assets), and a fresh copy is what users have after
+  // cloning. The server imports a project without .godot/ by itself.
+  cpSync(SAMPLE_PROJECT, dir, { recursive: true, filter: (src) => path.basename(src) !== '.godot' });
   // The addon lives at the repo root; the sample project gets a copy.
   cpSync(path.join(REPO_ROOT, 'addons', 'godot_mcp'), path.join(dir, 'addons', 'godot_mcp'), { recursive: true });
   return { dir, cleanup: () => removeDir(dir) };
