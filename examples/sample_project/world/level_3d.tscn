@@ -1,0 +1,32 @@
+[gd_scene format=3 uid="uid://dv6b1v2n72k1q"]
+
+[ext_resource type="MeshLibrary" uid="uid://dn1au1dlhgpxd" path="res://world/mesh_library.tres" id="1_rucpm"]
+
+[sub_resource type="NavigationMesh" id="NavigationMesh_87slf"]
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_bkm7q"]
+size = Vector2(20, 20)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_jmnem"]
+size = Vector3(4, 2, 4)
+
+[node name="Level3D" type="Node3D" unique_id=271539013]
+
+[node name="Grid" type="GridMap" parent="." unique_id=1860403250]
+mesh_library = ExtResource("1_rucpm")
+data = {
+"cells": PackedInt32Array(0, 0, 0, 1, 0, 0, 2, 0, 0, 65536, 1, 1048577)
+}
+
+[node name="Nav" type="NavigationRegion3D" parent="." unique_id=566698432]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 20)
+navigation_mesh = SubResource("NavigationMesh_87slf")
+
+[node name="Floor" type="MeshInstance3D" parent="Nav" unique_id=124612078]
+mesh = SubResource("PlaneMesh_bkm7q")
+
+[node name="Block" type="StaticBody3D" parent="Nav" unique_id=247273966]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0)
+
+[node name="Shape" type="CollisionShape3D" parent="Nav/Block" unique_id=419830541]
+shape = SubResource("BoxShape3D_jmnem")
