@@ -27,7 +27,12 @@ describe.skipIf(!enabled)('runtime channel (games started from the editor)', () 
     // the project setting editor/run/main_run_args adds --headless to every editor run.
     appendFileSync(path.join(proj.dir, 'project.godot'), '\n[editor]\n\nrun/main_run_args="--headless"\n');
     spawnSync(GODOT_BIN!, ['--headless', '--path', proj.dir, '--import'], { timeout: 180_000, stdio: 'ignore' });
-    editor = spawn(GODOT_BIN!, ['--headless', '--editor', '--path', proj.dir], { stdio: ['ignore', require('node:fs').openSync('/tmp/claude-0/-home-claude-godot-mcp/ffb8d209-78dc-5e53-819f-e027dd3c14bc/scratchpad/editor.log', 'w'), 'pipe'] });
+    // stdio stays 'ignore' like live-game.test.ts. A debugging leftover here used to send
+    // stdout to a log file under a fixed /tmp/claude-0/... path that only existed in one
+    // Linux container, so beforeAll threw ENOENT everywhere else (on Windows the path became
+    // C:\tmp\claude-0\...). It also piped stderr without reading it; once that pipe's buffer
+    // fills, Godot blocks on its next write, so an unread pipe is not safe for a long run.
+    editor = spawn(GODOT_BIN!, ['--headless', '--editor', '--path', proj.dir], { stdio: 'ignore' });
     const session = path.join(proj.dir, '.godot', 'godot_mcp', 'session.json');
     const deadline = Date.now() + 90_000;
     while (!existsSync(session) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 250));
