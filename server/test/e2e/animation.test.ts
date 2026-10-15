@@ -144,6 +144,10 @@ describe.skipIf(!GODOT_BIN)('animation (headless)', () => {
     expect(read.root.states.map((s: any) => s.name).sort()).toEqual(['Idle', 'Move', 'Walk']);
     expect(read.root.states.find((s: any) => s.name === 'Move').node.min_space).toBe(-2);
     expect(read.parameters['parameters/conditions/moving']).toBe(false);
+    // The playback object scripts use (MCP_TEST_LOG: it was left out).
+    expect(read.parameters['parameters/playback']).toMatchObject({ object: 'AnimationNodeStateMachinePlayback' });
+    expect(read.parameters['parameters/playback'].use).toMatch(/\.travel\("<state>"\)/);
+    expect(read.parameters['parameters/Move/playback']).toBeUndefined(); // a blend space has none
     expect(sceneText()).toContain('AnimationNodeBlendSpace1D');
   }, 120_000);
 

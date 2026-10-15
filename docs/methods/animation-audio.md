@@ -125,7 +125,7 @@ or the class name for other AnimationNodes. Blend spaces report `min_space`, `ma
 `points: [{index, name, position, type, animation | node}]` (2D adds `auto_triangles`,
 `triangle_count`). Blend trees report `nodes` and `connections: [{from, to, input}]`.
 Nested graphs are expanded 4 levels deep. Start/End are not listed as states.
-`parameters` leaves out runtime-only values (playback objects, current_* times).
+`parameters` leaves out runtime-only times (current_*); runtime objects are listed by type, e.g. `"parameters/playback": {"object": "AnimationNodeStateMachinePlayback", "use": "$Tree.get(\"parameters/playback\").travel(\"<state>\")"}`.
 
 ### anim.tree (E/H)
 

@@ -122,9 +122,22 @@ static func read_tree(root: Node, params: Variant) -> Dictionary:
 			for suffix: String in _NOISY_PARAM_SUFFIXES:
 				if pname.ends_with(suffix):
 					noisy = true
+			if noisy:
+				continue  # runtime positions, not authorable
 			var v: Variant = tree.get(pname)
-			if noisy or v is Object:
-				continue  # runtime state (playback objects, positions), not authorable
+			if v is Object or int(info["type"]) == TYPE_OBJECT:
+				# Runtime objects, above all "parameters/playback" (an
+				# AnimationNodeStateMachinePlayback per state machine), which is what scripts
+				# use: get("parameters/playback").travel("state"). Not authorable, but worth
+				# listing with its type (MCP_TEST_LOG: it was missing entirely).
+				var cls: String = (v as Object).get_class() if v is Object else str(info.get("hint_string", ""))
+				if cls.is_empty():
+					cls = str(info.get("class_name", "Object"))
+				var entry: Dictionary = {"object": cls}
+				if cls == "AnimationNodeStateMachinePlayback":
+					entry["use"] = "$%s.get(\"%s\").travel(\"<state>\")" % [NodePaths.rel_path(root, tree), pname]
+				params_out[pname] = entry
+				continue
 			params_out[pname] = Codec.encode(v, root)
 		result["parameters"] = params_out
 	return R.ok(result)
