@@ -1,0 +1,45 @@
+{
+  "header": { "version_full_name": "Godot Engine v4.7.2.stable.official" },
+  "utility_functions": [
+    { "name": "lerp", "return_type": "Variant", "is_vararg": false, "arguments": [{ "name": "from", "type": "Variant" }, { "name": "to", "type": "Variant" }, { "name": "weight", "type": "Variant" }], "description": "Linearly interpolates between two values." },
+    { "name": "print", "is_vararg": true, "arguments": [{ "name": "arg1", "type": "Variant" }], "description": "Prints to the console." }
+  ],
+  "global_enums": [{ "name": "Key", "is_bitfield": false, "values": [{ "name": "KEY_SPACE", "value": 32, "description": "Space key." }] }],
+  "global_constants": [],
+  "singletons": [{ "name": "Input", "type": "Input" }],
+  "builtin_classes": [
+    {
+      "name": "Vector2",
+      "brief_description": "A 2D vector using floating-point coordinates.",
+      "description": "A 2-element structure.",
+      "members": [{ "name": "x", "type": "float", "description": "The vector's X component." }],
+      "constructors": [{ "arguments": [{ "name": "x", "type": "float" }, { "name": "y", "type": "float" }], "description": "Constructs a new Vector2." }],
+      "methods": [{ "name": "length", "return_type": "float", "is_const": true, "is_static": false, "is_vararg": false, "description": "Returns the length (magnitude) of this vector." }],
+      "constants": [{ "name": "ZERO", "type": "Vector2", "value": "Vector2(0, 0)", "description": "Zero vector." }]
+    }
+  ],
+  "classes": [
+    { "name": "Object", "api_type": "core", "brief_description": "Base class for all other classes in the engine.", "description": "", "methods": [{ "name": "free", "is_const": false, "is_static": false, "is_vararg": false, "is_virtual": false, "description": "Deletes the object from memory." }] },
+    {
+      "name": "Node",
+      "inherits": "Object",
+      "api_type": "core",
+      "brief_description": "Base class for all scene objects.",
+      "description": "Nodes are Godot's building blocks.",
+      "methods": [
+        { "name": "_process", "is_const": false, "is_static": false, "is_vararg": false, "is_virtual": true, "arguments": [{ "name": "delta", "type": "float" }], "description": "Called on each idle frame." },
+        { "name": "get_children", "is_const": true, "is_static": false, "is_vararg": false, "is_virtual": false, "return_value": { "type": "typedarray::Node" }, "arguments": [{ "name": "include_internal", "type": "bool", "default_value": "false" }], "description": "Returns all children of this node inside an [Array]." },
+        { "name": "set_process_mode", "is_const": false, "is_static": false, "is_vararg": false, "is_virtual": false, "arguments": [{ "name": "mode", "type": "enum::Node.ProcessMode" }] }
+      ],
+      "properties": [{ "type": "int", "name": "process_mode", "setter": "set_process_mode", "getter": "get_process_mode", "description": "The node's processing behavior." }],
+      "signals": [{ "name": "ready", "description": "Emitted when the node is ready." }],
+      "enums": [{ "name": "ProcessMode", "is_bitfield": false, "values": [{ "name": "PROCESS_MODE_INHERIT", "value": 0, "description": "Inherits [member process_mode]." }] }],
+      "constants": [{ "name": "NOTIFICATION_READY", "value": 13, "description": "Notification received when the node is ready." }]
+    },
+    { "name": "Node2D", "inherits": "Node", "api_type": "core", "brief_description": "A 2D game object.", "description": "", "properties": [{ "type": "Vector2", "name": "position", "setter": "set_position", "getter": "get_position", "description": "Position, relative to the node's parent." }] },
+    { "name": "CharacterBody2D", "inherits": "Node2D", "api_type": "core", "brief_description": "A 2D physics body specialized for characters moved by script.", "description": "", "methods": [{ "name": "move_and_slide", "is_const": false, "is_static": false, "is_vararg": false, "is_virtual": false, "return_value": { "type": "bool" }, "description": "Moves the body based on [member velocity]." }] },
+    { "name": "CharacterBody3D", "inherits": "Node", "api_type": "core", "brief_description": "A 3D physics body specialized for characters moved by script.", "description": "", "methods": [{ "name": "move_and_slide", "is_const": false, "is_static": false, "is_vararg": false, "is_virtual": false, "return_value": { "type": "bool" }, "description": "Moves the body based on [member velocity]." }] },
+    { "name": "EditorMoveTool", "inherits": "Node", "api_type": "editor", "brief_description": "A made-up editor class to test ranking.", "description": "", "methods": [{ "name": "move_and_slide_editor", "is_const": false, "is_static": false, "is_vararg": false, "is_virtual": false, "description": "Fake." }] },
+    { "name": "AudioStreamPlayer", "inherits": "Node", "api_type": "core", "brief_description": "A node for audio playback.", "description": "", "methods": [{ "name": "play", "is_const": false, "is_static": false, "is_vararg": false, "is_virtual": false, "arguments": [{ "name": "from_position", "type": "float", "default_value": "0.0" }], "description": "Plays a sound from the beginning." }] }
+  ]
+}

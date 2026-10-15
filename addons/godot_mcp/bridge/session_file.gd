@@ -9,9 +9,18 @@ extends RefCounted
 
 const Constants := preload("../core/constants.gd")
 
+## [code/docs area] Session file written instead of session.json by a private "LSP-only"
+## editor that the MCP server starts just for the GDScript language server (see
+## server/src/lsp/manager.ts and plugin.gd). A separate file keeps the server's main
+## bridge from routing scene edits into that invisible editor, while still letting the
+## server reach it (e.g. to ask for a filesystem rescan after files change on disk).
+const LSP_SESSION_FILE: String = "res://.godot/godot_mcp/lsp_session.json"
+
 
 ## Writes the session file. Returns OK or the Godot error code.
-static func write(port: int, token: String) -> int:
+## [code/docs area] `file` selects session.json (default) or LSP_SESSION_FILE; `extra` adds
+## fields such as "lsp_port" (the editor's GDScript language server port).
+static func write(port: int, token: String, file: String = Constants.SESSION_FILE, extra: Dictionary = {}) -> int:
 	var dir_abs: String = ProjectSettings.globalize_path(Constants.SESSION_DIR)
 	var dir_err: int = DirAccess.make_dir_recursive_absolute(dir_abs)
 	if dir_err != OK and dir_err != ERR_ALREADY_EXISTS:
@@ -26,7 +35,8 @@ static func write(port: int, token: String) -> int:
 		"project_path": Constants.project_path(),
 		"started_at": Constants.utc_now_iso(),
 	}
-	var path_abs: String = ProjectSettings.globalize_path(Constants.SESSION_FILE)
+	data.merge(extra)
+	var path_abs: String = ProjectSettings.globalize_path(file)
 	# Write to a temp file and rename, so a server polling for the file never reads a
 	# half-written JSON document.
 	var tmp_abs: String = path_abs + ".tmp"
@@ -46,8 +56,8 @@ static func write(port: int, token: String) -> int:
 
 
 ## Deletes the session file if it exists (and still belongs to this process).
-static func remove() -> void:
-	var path_abs: String = ProjectSettings.globalize_path(Constants.SESSION_FILE)
+static func remove(file: String = Constants.SESSION_FILE) -> void:
+	var path_abs: String = ProjectSettings.globalize_path(file)
 	if not FileAccess.file_exists(path_abs):
 		return
 	# Another editor instance on the same project may have overwritten the file since we
