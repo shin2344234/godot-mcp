@@ -21,7 +21,7 @@ func handle(method: String, params: Variant) -> Dictionary:
 		params = {}
 	if not params is Dictionary:
 		return R.err(R.BAD_PARAMS, "'params' must be a JSON object.")
-	if method in Methods.EDITOR_ONLY:
+	if Methods.is_editor_only(method):
 		return Methods.editor_only_error(method)
 	match method:
 		"ping":
@@ -42,7 +42,41 @@ func handle(method: String, params: Variant) -> Dictionary:
 	var mutations: Dictionary = Methods.scene_mutations()
 	if mutations.has(method):
 		return _mutate(mutations[method], params)
+	var descriptor: Variant = Methods.module_methods().get(method)
+	if descriptor is Dictionary:
+		return _dispatch_module(method, descriptor, params)
 	return Methods.unknown_method_error(method)
+
+
+## Runs a method registered by an area module (see Methods.MODULES for the kinds).
+func _dispatch_module(method: String, descriptor: Dictionary, params: Dictionary) -> Dictionary:
+	var fn: Callable = descriptor["fn"]
+	match str(descriptor.get("kind", "")):
+		"scene_mutation":
+			return _mutate(fn, params)
+		"scene_read":
+			return _with_scene(params, func(root: Node, _path: String) -> Dictionary:
+				return fn.call(root, params))
+		"project":
+			return fn.call(params, _env())
+	return R.err(R.INTERNAL, "Method '%s' has an unknown descriptor kind '%s' (addon bug)." % [method, descriptor.get("kind")])
+
+
+## The headless counterpart of EditorBackend._env(): same keys, no editor objects.
+##   load_scene  Callable(params) -> {"value": root, "path": path} | error (loads params.scene;
+##               the caller must free the root)
+##   save_scene  Callable(root, path) -> {} on success or an error Dictionary
+func _env() -> Dictionary:
+	return {
+		"editor": false,
+		"interface": null,
+		"undo_redo": null,
+		"filesystem": null,
+		"plugin": null,
+		"logs": null,
+		"load_scene": _load_scene,
+		"save_scene": SceneOps.pack_and_save,
+	}
 
 
 ## scene.save is a no-op headless: every mutation already saved its scene.

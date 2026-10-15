@@ -15,10 +15,32 @@ import type { Config } from '../config.js';
 import type { HeadlessRunner } from '../godot/headless.js';
 import type { RunManager } from '../godot/runs.js';
 
-/** Tool groups, selectable with GODOT_MCP_TOOLSETS. */
-export type Group = 'core' | 'files' | 'scene' | 'node' | 'script' | 'run' | 'editor';
+/**
+ * Tool groups, selectable with GODOT_MCP_TOOLSETS. Step 1 shipped the first
+ * seven; step 2 (full editor authoring) added the rest.
+ */
+export const ALL_GROUPS = [
+  'core',
+  'files',
+  'scene',
+  'node',
+  'script',
+  'run',
+  'editor',
+  'signal', // signal connections in scenes
+  'resource', // .tres/.res resources, dependencies, UIDs
+  'visual', // visual shaders, Control layout, shader checks
+  'anim', // AnimationPlayer / AnimationTree
+  'world', // TileMapLayer, GridMap, TileSet, navigation
+  'audio', // audio bus layout
+  'project', // project settings, input map, autoloads, plugins, validation
+  'import', // import options and reimport
+  'export', // export presets and builds
+  'code', // GDScript language server: diagnostics, symbols, lookups, rename
+  'docs', // offline Godot class reference
+] as const;
 
-export const ALL_GROUPS: readonly Group[] = ['core', 'files', 'scene', 'node', 'script', 'run', 'editor'];
+export type Group = (typeof ALL_GROUPS)[number];
 
 /** Shared services an operation can use. */
 export interface OpContext {
@@ -28,6 +50,12 @@ export interface OpContext {
   runs: RunManager;
   /** Abort signal from the MCP request (client cancelled). */
   signal?: AbortSignal;
+  /**
+   * Report progress on a long operation (exports, reimports, docs index
+   * builds). A no-op when the client didn't ask for progress. `total` may be
+   * omitted when unknown.
+   */
+  progress?: (progress: number, total?: number, message?: string) => void;
 }
 
 /** What an operation returns: JSON for the model, plus optional images. */

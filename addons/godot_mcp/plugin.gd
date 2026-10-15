@@ -29,7 +29,7 @@ func _enter_tree() -> void:
 	_logs = LogBuffer.new(2000)
 	OS.add_logger(_logs)
 
-	_backend = EditorBackend.new(_logs)
+	_backend = EditorBackend.new(_logs, self)
 	_server = BridgeServer.new(_backend.handle, _welcome_payload)
 	var base_port: int = int(ProjectSettings.get_setting(Constants.PORT_SETTING, Constants.DEFAULT_PORT))
 	var err: int = _server.start(base_port)

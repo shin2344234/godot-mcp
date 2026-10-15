@@ -78,9 +78,11 @@ func release_direct() -> void:
 ## Editor: register everything as one undoable action and execute it.
 ## `undo_redo` is the EditorUndoRedoManager; `context` (the edited scene root) makes sure
 ## the action lands in that scene's history rather than the global one.
-func commit_to_undo_redo(undo_redo: Object, action_name: String, context: Object) -> void:
-	# 0 = UndoRedo.MERGE_DISABLE: every MCP call is its own undo step.
-	undo_redo.call("create_action", action_name, 0, context)
+## `merge_mode` is an UndoRedo.MergeMode: the default 0 (MERGE_DISABLE) makes every MCP
+## call its own undo step; batches pass 2 (MERGE_ALL) so consecutive actions with the same
+## name collapse into a single step.
+func commit_to_undo_redo(undo_redo: Object, action_name: String, context: Object, merge_mode: int = 0) -> void:
+	undo_redo.call("create_action", action_name, merge_mode, context)
 	for op: Dictionary in _do_ops:
 		match op["kind"]:
 			"method":
