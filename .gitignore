@@ -4,3 +4,5 @@ dist/
 *.log
 # Godot cache inside the sample project
 examples/**/.godot/
+# .mcpb build output and its staging folder (scripts/build-mcpb.mjs)
+dist-bundles/

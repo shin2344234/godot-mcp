@@ -1,0 +1,17 @@
+{
+  "name": "godot-mcp",
+  "description": "Godot 4 tools for Claude Code: the godot-mcp MCP server plus a Godot workflow skill.",
+  "owner": {
+    "name": "shin2344234",
+    "url": "https://github.com/shin2344234"
+  },
+  "plugins": [
+    {
+      "name": "godot-mcp",
+      "source": "./packaging/claude-plugin",
+      "description": "Edit Godot 4 scenes, nodes and scripts, run the game and read its errors, drive the running game, and look up the offline class reference.",
+      "category": "development",
+      "tags": ["godot", "gamedev", "mcp"]
+    }
+  ]
+}

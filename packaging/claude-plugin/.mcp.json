@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "godot": {
+      "command": "npx",
+      "args": ["-y", "@shin2344234/godot-mcp"],
+      "env": {
+        "GODOT_PROJECT_PATH": "${CLAUDE_PROJECT_DIR}/${user_config.project_folder}",
+        "GODOT_BIN": "${user_config.godot_path}"
+      }
+    }
+  }
+}

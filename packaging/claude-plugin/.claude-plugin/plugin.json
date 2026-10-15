@@ -1,0 +1,30 @@
+{
+  "name": "godot-mcp",
+  "displayName": "Godot MCP",
+  "version": "0.1.0",
+  "description": "Work on Godot 4 projects: edit scenes, nodes and scripts, run the game and read its errors, drive the running game, and look up the offline class reference. Bundles the godot-mcp server and a Godot workflow skill.",
+  "author": {
+    "name": "shin2344234",
+    "url": "https://github.com/shin2344234"
+  },
+  "homepage": "https://github.com/shin2344234/godot-mcp",
+  "repository": "https://github.com/shin2344234/godot-mcp",
+  "license": "MIT",
+  "keywords": ["godot", "godot4", "gamedev", "gdscript", "mcp"],
+  "userConfig": {
+    "project_folder": {
+      "type": "string",
+      "title": "Godot project folder",
+      "description": "Where project.godot is, relative to the folder you start Claude Code in. Leave empty when project.godot is in that folder itself.",
+      "required": false,
+      "default": ""
+    },
+    "godot_path": {
+      "type": "file",
+      "title": "Godot executable",
+      "description": "Full path of your Godot 4 executable (Windows: the main .exe, not _console.exe). Leave empty to find \"godot\" on PATH. A GODOT_PATH environment variable, if you have one, takes precedence.",
+      "required": false,
+      "default": ""
+    }
+  }
+}
