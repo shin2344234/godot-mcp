@@ -155,7 +155,9 @@ static func set_settings(params: Dictionary, env: Dictionary) -> Dictionary:
 		if not key.contains("/") or key.ends_with("/"):
 			return R.err(R.BAD_PARAMS, "project.set: '%s' is not a setting name; names look like \"section/group/name\", e.g. \"display/window/size/viewport_width\". Use godot_project_settings to browse existing names." % key)
 		var exists: bool = ProjectSettings.has_setting(key)
-		if not exists and value != null and not create:
+		# The bridge port is registered by the editor plugin only, so headless it may not
+		# exist yet; it is still a known setting.
+		if not exists and value != null and not create and key != Constants.PORT_SETTING:
 			var similar: Array[String] = Fuzzy.suggest(key, infos.keys(), 5)
 			return R.err(R.NOT_FOUND, "project.set: '%s' is not an existing project setting.%s To add a custom setting, pass \"create\": true." % [key, Fuzzy.did_you_mean(similar)], {"similar": similar})
 		var old: Variant = ProjectSettings.get_setting(key) if exists else null
@@ -279,7 +281,9 @@ static func edit_input(params: Dictionary, env: Dictionary) -> Dictionary:
 			return R.err(R.BAD_PARAMS, "%s: %s" % [where, name_err])
 		var key: String = "input/" + action
 		if not working.has(action):
-			working[action] = InputSpec.copy_action(ProjectSettings.get_setting(key)) if ProjectSettings.has_setting(key) else null
+			working[action] = null
+			if ProjectSettings.has_setting(key):
+				working[action] = InputSpec.copy_action(ProjectSettings.get_setting(key))
 		var current: Variant = working[action]
 		if kind != "add_action" and current == null:
 			return _unknown_action(where, action)
@@ -693,7 +697,10 @@ static func edit_plugins(params: Dictionary, env: Dictionary) -> Dictionary:
 		next.sort()
 		if next != current:
 			var old: Variant = ProjectSettings.get_setting(PLUGINS_SETTING) if ProjectSettings.has_setting(PLUGINS_SETTING) else null
-			var err: Dictionary = commit_settings([[PLUGINS_SETTING, old, next if not next.is_empty() else null]], [], "MCP: project.plugins", env)
+			var new_value: Variant = null # an empty list erases the setting
+			if not next.is_empty():
+				new_value = next
+			var err: Dictionary = commit_settings([[PLUGINS_SETTING, old, new_value]], [], "MCP: project.plugins", env)
 			if R.is_err(err):
 				return err
 			if not changed.is_empty():
