@@ -92,13 +92,20 @@ Error `code` values:
 **Messages must be actionable for an LLM**: say what was wrong and what would fix it
 (e.g. list valid child names, valid class names suggestions, etc.).
 
-### Events (reserved for later steps)
+### Events
+
+The editor pushes unsolicited frames for games started from the editor (step 3):
 
 ```json
-{ "type": "event", "event": "log", "data": { ... } }
+{ "type": "event", "event": "game.message", "data": { "session": 1, "message": "mcp:reply", "data": ["{...}"] } }
 ```
 
-Not required in step 1.
+- `game.started` / `game.stopped` `{session}`: an editor debugger session began or ended.
+- `game.message` `{session, message, data}`: an `mcp:*` message from the game's runtime.
+
+The server sends to the game with `game.send {session?, command, data}` and lists sessions (with the
+runtime's last hello) with `game.status`. Both are editor-only. Details in
+[runtime-protocol.md](runtime-protocol.md) section 5.
 
 ## 2. Headless runner
 
