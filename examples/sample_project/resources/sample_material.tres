@@ -1,0 +1,11 @@
+[gd_resource type="StandardMaterial3D" format=3 uid="uid://dg2xiy8hs44vm"]
+
+[ext_resource type="Texture2D" uid="uid://co7qc6cxx4spi" path="res://icon.svg" id="1_r1xqp"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_nwdu4"]
+albedo_color = Color(0, 0, 1, 1)
+
+[resource]
+next_pass = SubResource("StandardMaterial3D_nwdu4")
+albedo_color = Color(1, 0.53333336, 0, 1)
+albedo_texture = ExtResource("1_r1xqp")
