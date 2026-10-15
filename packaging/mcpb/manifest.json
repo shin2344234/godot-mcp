@@ -1,0 +1,101 @@
+{
+  "manifest_version": "0.3",
+  "name": "godot-mcp",
+  "display_name": "Godot MCP",
+  "version": "0.0.0",
+  "description": "Edit Godot 4 scenes, nodes and scripts, run the game and read its errors, through the live editor or headless Godot.",
+  "long_description": "Godot MCP connects Claude to a Godot 4 project on your computer. It can read and edit scenes, nodes, scripts, resources, animations, tile maps and project settings; run the game and read its errors; inspect and drive the running game (live node tree, input, screenshots, debugger); and look things up in the offline Godot class reference.\n\nIt works in two ways: with the Godot editor open (edits go through the editor and are undoable) or without it (it runs Godot headless and edits the files on disk). Both need the small godot_mcp editor addon inside your project, in addons/godot_mcp. This bundle contains the addon: ask Claude to install it (the godot_addon_install tool copies it into the project and enables it), or copy the addons/godot_mcp folder from the GitHub repository.\n\nEverything runs locally. The server makes no network connections of its own; the editor bridge listens on 127.0.0.1 only.",
+  "author": {
+    "name": "shin2344234",
+    "url": "https://github.com/shin2344234"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shin2344234/godot-mcp"
+  },
+  "homepage": "https://github.com/shin2344234/godot-mcp",
+  "documentation": "https://github.com/shin2344234/godot-mcp#readme",
+  "support": "https://github.com/shin2344234/godot-mcp/issues",
+  "icon": "icon.png",
+  "license": "MIT",
+  "keywords": [
+    "godot",
+    "godot4",
+    "gamedev",
+    "game engine",
+    "gdscript",
+    "mcp"
+  ],
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/dist/index.js"
+      ],
+      "env": {
+        "GODOT_PROJECT_PATH": "${user_config.project_path}",
+        "GODOT_PATH": "${user_config.godot_path}",
+        "GODOT_MCP_MODE": "${user_config.mode}",
+        "GODOT_MCP_TOOLSETS": "${user_config.toolsets}",
+        "GODOT_MCP_READ_ONLY": "${user_config.read_only}",
+        "GODOT_MCP_ALLOW_EVAL": "${user_config.allow_eval}"
+      }
+    }
+  },
+  "tools_generated": true,
+  "user_config": {
+    "project_path": {
+      "type": "directory",
+      "title": "Godot project folder",
+      "description": "The folder that contains your project.godot file.",
+      "required": true
+    },
+    "godot_path": {
+      "type": "file",
+      "title": "Godot executable",
+      "description": "Your Godot 4 executable (Windows: Godot_v4.x-stable_win64.exe, not the _console.exe; macOS: Godot.app/Contents/MacOS/Godot). Optional: if left empty, \"godot\" is looked up on PATH, which desktop apps often don't inherit, so setting it is recommended.",
+      "required": false,
+      "default": ""
+    },
+    "mode": {
+      "type": "string",
+      "title": "Tool mode",
+      "description": "\"full\" lists every Godot tool. \"compact\" lists only the core tools plus a godot_tools catalog that reaches the rest, which keeps Claude's context smaller.",
+      "required": false,
+      "default": "full"
+    },
+    "toolsets": {
+      "type": "string",
+      "title": "Tool groups",
+      "description": "Optional comma-separated list of tool groups to enable, e.g. \"scene,node,script,run,docs\". Leave empty for all groups. Groups: core, files, scene, node, script, signal, resource, visual, anim, world, audio, project, import, export, code, docs, run, game, debug, test, editor.",
+      "required": false,
+      "default": ""
+    },
+    "read_only": {
+      "type": "boolean",
+      "title": "Read-only",
+      "description": "Hide every tool that changes the project, so Claude can only look.",
+      "required": false,
+      "default": false
+    },
+    "allow_eval": {
+      "type": "boolean",
+      "title": "Allow code evaluation in the running game",
+      "description": "Let godot_game_eval run GDScript inside your running game. Off by default: evaluated code can do anything the game can (files, OS calls).",
+      "required": false,
+      "default": false
+    }
+  },
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ],
+    "runtimes": {
+      "node": ">=22.0.0"
+    }
+  }
+}

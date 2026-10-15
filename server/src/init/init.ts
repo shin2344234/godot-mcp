@@ -137,7 +137,9 @@ export async function runInit(opts: InitOptions): Promise<number> {
   }
 
   // --- 2. MCP client configs ----------------------------------------------
-  const godot = await findGodot();
+  // Honour an explicit Godot (GODOT_PATH / GODOT_BIN) so it is written into the client
+  // configs; findGodot() alone would only search PATH and the usual install folders.
+  const godot = await findGodot(process.env.GODOT_PATH || process.env.GODOT_BIN || undefined);
   const cmd = opts.serverCommand ?? defaultServerCommand();
   const serverConfig: McpServerConfig = {
     command: cmd.command,

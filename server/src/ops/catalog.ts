@@ -30,6 +30,7 @@ import * as testing from './testing.js';
 /** Every operation, in a fixed order (the spec asks for a deterministic tools/list). */
 export const ALL_OPERATIONS: readonly Operation[] = [
   core.status,
+  core.addonInstall,
   core.projectInfo,
   core.projectSettings,
   files.filesList,

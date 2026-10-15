@@ -2,19 +2,35 @@
   "name": "@shin2344234/godot-mcp",
   "version": "0.1.0",
   "description": "MCP server for the Godot 4 engine: edit scenes, nodes and scripts, run the game and read errors, through a live editor bridge or headless Godot.",
-  "private": true,
+  "mcpName": "io.github.shin2344234/godot-mcp",
   "type": "module",
   "license": "MIT",
+  "author": "shin2344234 (https://github.com/shin2344234)",
+  "homepage": "https://github.com/shin2344234/godot-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shin2344234/godot-mcp.git",
+    "directory": "server"
+  },
+  "bugs": {
+    "url": "https://github.com/shin2344234/godot-mcp/issues"
+  },
   "bin": {
     "godot-mcp": "dist/index.js"
   },
   "main": "dist/index.js",
   "files": [
     "dist",
-    "addon"
+    "!dist/**/*.map",
+    "addon",
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -23,15 +39,24 @@
     "test": "vitest run",
     "test:unit": "vitest run test/unit",
     "test:e2e": "vitest run test/e2e",
-    "prepack": "npm run build && node scripts/copy-addon.mjs",
-    "gen:gdscript-docs": "node scripts/gen-gdscript-docs.mjs"
+    "prepack": "node ../scripts/check-versions.mjs && node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && npm run build && node scripts/copy-addon.mjs",
+    "gen:gdscript-docs": "node scripts/gen-gdscript-docs.mjs",
+    "check:versions": "node ../scripts/check-versions.mjs"
   },
   "keywords": [
     "mcp",
+    "mcp-server",
     "model-context-protocol",
     "godot",
     "godot4",
-    "gamedev"
+    "godot-engine",
+    "gdscript",
+    "gamedev",
+    "game-development",
+    "ai",
+    "llm",
+    "agent",
+    "claude"
   ],
   "dependencies": {
     "@modelcontextprotocol/server": "^2.3.1",

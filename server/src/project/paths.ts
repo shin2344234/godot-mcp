@@ -25,6 +25,27 @@ export interface ProjectPath {
 }
 
 /**
+ * Files no tool may read, search, write or list the contents of, whatever the
+ * path spelling: secrets Godot or this project keep inside the project folder.
+ *   - export_credentials.cfg: export passwords/keystore secrets (Godot keeps them
+ *     out of export_presets.cfg precisely so they're never shared);
+ *   - godot_mcp/session.json, lsp_session.json: the editor bridge's per-session
+ *     token. Anyone holding it can drive the editor.
+ * Compared case-insensitively (Windows and macOS file systems usually are).
+ */
+const SECRET_FILES = ['.godot/export_credentials.cfg', '.godot/godot_mcp/session.json', '.godot/godot_mcp/lsp_session.json'];
+
+/** True when a project-relative path ("a/b.cfg", forward slashes) is one of SECRET_FILES. */
+export function isSecretPath(rel: string): boolean {
+  const r = rel.replace(/\\/g, '/').toLowerCase();
+  return SECRET_FILES.includes(r);
+}
+
+function secretError(input: string): PathError {
+  return new PathError(`"${input}" holds secrets (export credentials or the editor bridge token) and can't be accessed through the MCP tools.`);
+}
+
+/**
  * Resolve an agent-supplied path against the project root.
  * Does NOT require the file to exist (callers creating files need that).
  */
@@ -53,6 +74,7 @@ export function resolveProjectPath(projectRoot: string, input: string): ProjectP
   }
 
   const rel = relOs.split(path.sep).join('/');
+  if (isSecretPath(rel)) throw secretError(input);
   return { abs, rel, res: `res://${rel}` };
 }
 
@@ -73,6 +95,8 @@ export async function resolveProjectPathStrict(projectRoot: string, input: strin
       if (rel.startsWith('..') || path.isAbsolute(rel)) {
         throw new PathError(`Path "${input}" resolves (through a symlink) outside the project folder.`);
       }
+      // A symlink elsewhere in the project pointing at a secret file is refused too.
+      if (probe === resolved.abs && isSecretPath(rel.split(path.sep).join('/'))) throw secretError(input);
       break;
     } catch (err) {
       if (err instanceof PathError) throw err;

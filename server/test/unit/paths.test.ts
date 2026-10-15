@@ -21,3 +21,20 @@ describe('resolveProjectPath', () => {
     expect(() => resolveProjectPath(root, 'user://save.dat')).toThrow(PathError);
   });
 });
+
+// Secrets inside the project folder: export passwords and the editor bridge token.
+// Every file tool resolves paths here, so refusing them here covers reads, writes and edits.
+describe('secret files', () => {
+  it.each([
+    'res://.godot/export_credentials.cfg',
+    'res://.GODOT/Export_Credentials.cfg',
+    '.godot\\godot_mcp\\session.json',
+    'res://.godot/godot_mcp/../godot_mcp/lsp_session.json',
+  ])('refuses %s', (p) => {
+    expect(() => resolveProjectPath(root, p)).toThrow(/secrets/);
+  });
+
+  it('still allows other files in .godot/', () => {
+    expect(resolveProjectPath(root, 'res://.godot/godot_mcp/override.cfg.user-backup').rel).toBe('.godot/godot_mcp/override.cfg.user-backup');
+  });
+});

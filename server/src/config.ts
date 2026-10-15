@@ -92,7 +92,11 @@ function truthy(value: string | undefined): boolean {
 export function loadConfig(argv: string[] = process.argv.slice(2), env: NodeJS.ProcessEnv = process.env): Config {
   const args = parseArgs(argv);
 
-  const projectArg = args.get('project') ?? env.GODOT_PROJECT_PATH ?? process.cwd();
+  // Empty env values count as unset: bundle/plugin installers (Claude Desktop .mcpb,
+  // Claude Code plugins) pass "" for settings the user left blank, and that must not
+  // hide a real value from another variable or the defaults.
+  const nonEmpty = (v: string | undefined) => (v && v.trim() !== '' ? v : undefined);
+  const projectArg = args.get('project') ?? nonEmpty(env.GODOT_PROJECT_PATH) ?? process.cwd();
 
   const toolsetsRaw = args.get('toolsets') ?? env.GODOT_MCP_TOOLSETS;
   let toolsets: Set<string> | undefined;
@@ -113,7 +117,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2), env: NodeJS.P
 
   return {
     projectPath: path.resolve(projectArg),
-    godotPath: args.get('godot') ?? env.GODOT_PATH ?? env.GODOT_BIN ?? undefined,
+    godotPath: args.get('godot') ?? nonEmpty(env.GODOT_PATH) ?? nonEmpty(env.GODOT_BIN) ?? undefined,
     toolsets,
     mode,
     readOnly: truthy(args.get('read-only') ?? env.GODOT_MCP_READ_ONLY),

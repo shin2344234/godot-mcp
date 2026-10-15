@@ -1,3 +1,20 @@
 * text=auto eol=lf
 *.png binary
 *.svg text
+
+# --- Archives (GitHub "Download ZIP", release "Source code" archives, `git archive`) -------
+# The Godot Asset Store (store.godotengine.org, Godot 4.7+) does NOT download GitHub
+# archives: each version is a zip uploaded by hand on the asset's Versions page, built
+# with `node scripts/build-addon-zip.mjs` (dist-addon/godot_mcp-<version>.zip, only
+# addons/godot_mcp/ inside). So no export-ignore rules are needed for the store, and we
+# keep GitHub's source archives complete (server, docs, tests) for people building the
+# server from source.
+#
+# Only if the addon is ALSO submitted to the legacy Asset Library
+# (godotengine.org/asset-library, which installs a GitHub archive of a commit) should the
+# rules below be enabled. They make every GitHub archive contain just addons/ (the pattern
+# from docs.godotengine.org "Submitting to the Asset Store" > Recommendations):
+#
+# /**        export-ignore
+# /addons    !export-ignore
+# /addons/** !export-ignore
