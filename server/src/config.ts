@@ -49,6 +49,14 @@ export interface Config {
   lspTimeoutMs: number;
   /** Stop the private headless LSP editor after this long without code.* calls, in ms. */
   lspIdleTimeoutMs: number;
+  /**
+   * [live game area] Allow godot_game_eval to run code inside the running game
+   * (`--allow-eval` / GODOT_MCP_ALLOW_EVAL=1). Off by default: evaluated GDScript can do
+   * anything the game can (files, OS calls). The tool is listed either way (the tool list
+   * never depends on runtime state); while off it returns a DISABLED error saying how to
+   * turn it on.
+   */
+  allowEval: boolean;
 }
 
 /** Parse `--flag value` / `--flag=value` style args into a map. */
@@ -115,5 +123,6 @@ export function loadConfig(argv: string[] = process.argv.slice(2), env: NodeJS.P
     lspPort: env.GODOT_MCP_LSP_PORT ? Number(env.GODOT_MCP_LSP_PORT) : undefined,
     lspTimeoutMs: Number(env.GODOT_MCP_LSP_TIMEOUT_MS ?? 15_000),
     lspIdleTimeoutMs: Number(env.GODOT_MCP_LSP_IDLE_MS ?? 10 * 60_000),
+    allowEval: truthy(args.get('allow-eval') ?? env.GODOT_MCP_ALLOW_EVAL),
   };
 }

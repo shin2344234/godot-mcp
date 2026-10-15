@@ -7,11 +7,12 @@ An [MCP](https://modelcontextprotocol.io) server for the **Godot 4** engine. Use
 - change project settings, input actions, autoloads, import options and export presets, and run exports
 - write scripts with GDScript language-server diagnostics, symbols and renames
 - look up the Godot class reference offline for the exact version you have installed
-- run the game and read its errors
+- run the game and work on it live: inspect and change nodes, send input, pause and step frames, take screenshots, profile, record and replay input
+- debug with breakpoints, stepping, stack and variables, and run tests
 
 It works through a live editor bridge, and through headless Godot when the editor is closed.
 
-> Status: early development (step 2 of 4: editor authoring done; next is the running game). Targets **Godot 4.7** and the **2026-07-28 MCP spec**. Older 2025-era MCP clients are also supported.
+> Status: early development (step 3 of 4: the running game and debugging done; next is polish and release). Targets **Godot 4.7** and the **2026-07-28 MCP spec**. Older 2025-era MCP clients are also supported.
 
 ## How it works
 
@@ -64,10 +65,11 @@ Then open the project in Godot and start a new agent session.
 | Flag / env var | Default | Meaning |
 |---|---|---|
 | `--project` / `GODOT_PROJECT_PATH` | current folder | Godot project folder |
-| `--godot` / `GODOT_PATH` | searched on PATH | Godot 4 executable |
+| `--godot` / `GODOT_PATH` | searched on PATH | Godot 4 executable. On Windows, point it at the main `Godot_v4.x-stable_win64.exe`, not the small `_console.exe` launcher, which can fail under load (the server reads output through pipes either way) |
 | `--mode` / `GODOT_MCP_MODE` | `full` | `full`: every operation is a tool. `compact`: core tools plus `godot_tools`, `godot_call_read` and `godot_call_write` |
 | `--toolsets` / `GODOT_MCP_TOOLSETS` | all | Comma list of the groups in the tools table below, e.g. `core,files,scene,node,script,run` |
 | `--read-only` / `GODOT_MCP_READ_ONLY` | off | Hide every tool that changes something |
+| `--allow-eval` / `GODOT_MCP_ALLOW_EVAL` | off | Let `godot_game_eval` run code inside the running game. Off, the tool explains how to turn it on |
 | `--confirm` / `GODOT_MCP_CONFIRM` | `elicit` | `never` skips the yes/no question before irreversible steps |
 | `GODOT_MCP_HEADLESS_TIMEOUT_MS` | `120000` | Limit for one headless Godot run |
 | `GODOT_MCP_BRIDGE_TIMEOUT_MS` | `30000` | Limit for one editor bridge request |
@@ -99,10 +101,15 @@ Tool names are `godot_` plus the method with dots replaced, e.g. `godot_node_add
 | code | `code_diagnostics`, `code_symbols`, `code_lookup`, `code_rename` |
 | docs | `docs_search`, `docs_class` |
 | run | `run_start`, `run_stop`, `run_output` |
-| editor | `editor_logs`, `editor_launch` |
+| game | `game_tree`, `game_get`, `game_edit`, `game_eval`, `game_input`, `game_time`, `game_record`, `game_screenshot` (also the editor 2D/3D views), `game_perf` |
+| debug | `debug_breakpoints`, `debug_control`, `debug_state` |
+| test | `test_run` (GUT or GdUnit4, whichever the project has) |
+| editor | `editor_logs`, `editor_launch`, `editor_ui` |
 | discovery | `godot_tools` (plus `godot_call_read` and `godot_call_write` in compact mode) |
 
 A few tools need the live editor (`scene_open`, `scene_save_as`, `scene_close`, `editor_logs`); the rest also work with the editor closed. The `code_*` tools start a private headless editor for the GDScript language server when your editor isn't open. Export credentials (`.godot/export_credentials.cfg`) are never read or returned.
+
+The `game_*` and `debug_*` tools work on a game started with `run_start` (mode `process`, no editor needed) and, except for breakpoints and the script profiler, on a game started from the editor. The server loads a small runtime into the game through a temporary `override.cfg` that is removed once the game is up; `project.godot` is never changed. The runtime does nothing in exported or normal runs. See [docs/runtime-protocol.md](docs/runtime-protocol.md).
 
 ### Resources and prompts
 

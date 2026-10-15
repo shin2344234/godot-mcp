@@ -26,6 +26,7 @@ import { enabledOperations } from '../ops/catalog.js';
 import { toolName, type OpContext, type OpResult, type Operation } from '../ops/types.js';
 import { SERVER_VERSION } from '../version.js';
 import { confirmStep } from './confirm.js';
+import { compactInput, toolJsonSchema } from './schema.js';
 import { buildInstructions } from './instructions.js';
 import { registerPrompts } from './prompts.js';
 import { registerResources } from './resources.js';
@@ -101,12 +102,18 @@ async function execute(server: McpServer, config: Config, op: Operation, args: u
   }
 }
 
+/**
+ * Tool annotations. Only hints that differ from the MCP defaults are sent
+ * (defaults: readOnlyHint false, destructiveHint true, idempotentHint false,
+ * openWorldHint true), and the title is not repeated here because tools carry
+ * a top-level title. destructiveHint/idempotentHint only mean something for
+ * tools that aren't read-only, per the spec.
+ */
 function annotations(op: Operation) {
+  if (op.readOnly) return { readOnlyHint: true, openWorldHint: false };
   return {
-    title: op.title,
-    readOnlyHint: op.readOnly,
-    destructiveHint: op.readOnly ? false : (op.destructive ?? false),
-    idempotentHint: op.idempotent ?? false,
+    destructiveHint: op.destructive ?? false,
+    ...(op.idempotent ? { idempotentHint: true } : {}),
     // Everything stays on the user's machine; nothing reaches the internet.
     openWorldHint: false,
   };
@@ -153,7 +160,7 @@ export function buildServer(config: Config, services: Omit<OpContext, 'signal'>)
       {
         title: op.title,
         description: op.description,
-        inputSchema: op.input,
+        inputSchema: compactInput(op.input),
         annotations: annotations(op),
         // Claude Code: load these up front even when it defers MCP tools.
         ...(op.alwaysLoad ? { _meta: { 'anthropic/alwaysLoad': true } } : {}),
@@ -170,12 +177,12 @@ export function buildServer(config: Config, services: Omit<OpContext, 'signal'>)
       description:
         'Godot tool catalog: search all available Godot operations by keyword ("search"), or get full parameter schemas for some ("describe").' +
         (config.mode === 'compact' ? ' Run them with godot_call_read / godot_call_write.' : ''),
-      inputSchema: z.object({
+      inputSchema: compactInput(z.object({
         action: z.enum(['search', 'describe']),
         query: z.string().optional().describe('search: keywords, e.g. "animation" or "delete node". Empty lists everything.'),
         operations: z.array(z.string()).optional().describe('describe: operation names from search, e.g. ["node.reparent"].'),
-      }),
-      annotations: { title: 'Find Godot operations', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      })),
+      annotations: { readOnlyHint: true, openWorldHint: false },
     },
     (async ({ action, query, operations }: { action: 'search' | 'describe'; query?: string; operations?: string[] }) => {
       if (action === 'search') {
@@ -192,7 +199,7 @@ export function buildServer(config: Config, services: Omit<OpContext, 'signal'>)
       const missing = names.filter((_, i) => !found[i]);
       return toToolResult({
         data: {
-          operations: found.filter(Boolean).map((op) => ({ ...catalogEntry(op!), input_schema: z.toJSONSchema(op!.input) })),
+          operations: found.filter(Boolean).map((op) => ({ ...catalogEntry(op!), input_schema: toolJsonSchema(op!.input) })),
           ...(missing.length ? { unknown: missing } : {}),
         },
       });
@@ -201,10 +208,10 @@ export function buildServer(config: Config, services: Omit<OpContext, 'signal'>)
 
   // --- Routers (compact mode) ---------------------------------------------
   if (config.mode === 'compact') {
-    const routerInput = z.object({
+    const routerInput = compactInput(z.object({
       operation: z.string().describe('Operation name from godot_tools, e.g. "node.reparent".'),
       args: z.record(z.string(), z.unknown()).default({}).describe('Arguments matching the operation\'s input_schema from godot_tools describe.'),
-    });
+    }));
 
     const route = (wantReadOnly: boolean) =>
       (async ({ operation, args }: { operation: string; args: Record<string, unknown> }, reqCtx: ServerContext) => {
@@ -220,7 +227,7 @@ export function buildServer(config: Config, services: Omit<OpContext, 'signal'>)
         const parsed = op.input.safeParse(args);
         if (!parsed.success) {
           return toErrorResult(
-            new OpError('BAD_PARAMS', `Invalid args for "${operation}": ${z.prettifyError(parsed.error)}`, { input_schema: z.toJSONSchema(op.input) }),
+            new OpError('BAD_PARAMS', `Invalid args for "${operation}": ${z.prettifyError(parsed.error)}`, { input_schema: toolJsonSchema(op.input) }),
           );
         }
         return execute(server, config, op, parsed.data, callContext(services, reqCtx), reqCtx);
@@ -232,7 +239,7 @@ export function buildServer(config: Config, services: Omit<OpContext, 'signal'>)
         title: 'Run a read-only Godot operation',
         description: 'Godot router: run any read-only operation found with godot_tools (inspect scenes, nodes, files, output).',
         inputSchema: routerInput,
-        annotations: { title: 'Run a read-only Godot operation', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+        annotations: { readOnlyHint: true, openWorldHint: false },
       },
       route(true),
     );
@@ -243,7 +250,7 @@ export function buildServer(config: Config, services: Omit<OpContext, 'signal'>)
           title: 'Run a Godot operation that changes things',
           description: 'Godot router: run any operation found with godot_tools that changes the project, scenes, files or editor state.',
           inputSchema: routerInput,
-          annotations: { title: 'Run a Godot operation that changes things', readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+          annotations: { destructiveHint: true, openWorldHint: false },
         },
         route(false),
       );

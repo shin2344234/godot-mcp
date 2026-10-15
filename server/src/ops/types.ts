@@ -17,7 +17,8 @@ import type { RunManager } from '../godot/runs.js';
 
 /**
  * Tool groups, selectable with GODOT_MCP_TOOLSETS. Step 1 shipped the first
- * seven; step 2 (full editor authoring) added the rest.
+ * seven; step 2 (full editor authoring) added the editor areas; step 3 (live
+ * game and debugging) added game, debug and test.
  */
 export const ALL_GROUPS = [
   'core',
@@ -38,6 +39,9 @@ export const ALL_GROUPS = [
   'export', // export presets and builds
   'code', // GDScript language server: diagnostics, symbols, lookups, rename
   'docs', // offline Godot class reference
+  'game', // the running game: live tree, edits, input, timing, screenshots, performance
+  'debug', // breakpoints, stepping, call stack and variables in a running game
+  'test', // GUT / GdUnit4 test runs
 ] as const;
 
 export type Group = (typeof ALL_GROUPS)[number];

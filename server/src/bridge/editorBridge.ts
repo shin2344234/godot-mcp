@@ -15,6 +15,7 @@
  * Uses Node 22's built-in global `WebSocket`, so no extra dependency.
  */
 
+import { EventEmitter } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { OpError } from '../errors.js';
@@ -58,7 +59,12 @@ function pidAlive(pid: number): boolean {
   }
 }
 
-export class EditorBridge {
+/**
+ * Emits 'event' (name: string, data: unknown) for event frames from the plugin
+ * (e.g. "game.message" relayed from a game started in the editor), and
+ * 'close' when the connection drops.
+ */
+export class EditorBridge extends EventEmitter {
   private ws: WebSocket | undefined;
   private welcome: Welcome | undefined;
   private nextId = 1;
@@ -69,7 +75,9 @@ export class EditorBridge {
   constructor(
     private readonly projectPath: string,
     private readonly timeoutMs: number,
-  ) {}
+  ) {
+    super();
+  }
 
   get sessionFilePath(): string {
     return path.join(this.projectPath, '.godot', 'godot_mcp', 'session.json');
@@ -157,7 +165,7 @@ export class EditorBridge {
           return;
         }
         if (msg.type === 'response') this.handleResponse(msg);
-        // 'event' frames are reserved for later steps (runtime logs etc.).
+        else if (msg.type === 'event' && typeof msg.event === 'string') this.emit('event', msg.event, msg.data);
       });
 
       ws.addEventListener('close', (ev) => {
@@ -188,8 +196,10 @@ export class EditorBridge {
   }
 
   private handleClose(): void {
+    const wasOpen = this.welcome !== undefined;
     this.ws = undefined;
     this.welcome = undefined;
+    if (wasOpen) this.emit('close');
     // Fail everything in flight; the editor went away mid-request.
     for (const [id, p] of this.pending) {
       clearTimeout(p.timer);

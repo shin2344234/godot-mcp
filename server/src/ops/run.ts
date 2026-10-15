@@ -3,13 +3,14 @@
  *
  * Two ways to run:
  *   - "editor": ask the open editor to play (same as pressing F5/F6). The
- *     user sees the game; output appears in the editor's Output panel.
- *     (Streaming that output back to the agent arrives with the runtime
- *     bridge in step 3.)
+ *     user sees the game; output appears in the editor's Output panel. The
+ *     runtime tools reach it through the plugin's debugger relay.
  *   - "process": the server starts Godot itself and captures stdout/stderr,
  *     so the agent can read errors with godot_run_output. Can be headless
  *     (no window; good for smoke tests) or windowed.
- * "auto" picks "editor" when it's connected, otherwise "process".
+ * "auto" picks "editor" when it's connected, otherwise "process" (always
+ * "process" when debug or movie options are given). Process runs are debug
+ * sessions with the server as the debugger (src/game/debugSession.ts).
  */
 
 import { spawn } from 'node:child_process';
@@ -17,8 +18,12 @@ import { existsSync } from 'node:fs';
 import { z } from 'zod';
 import { OpError } from '../errors.js';
 import { findGodot, GODOT_NOT_FOUND_HINT } from '../godot/binary.js';
+import type { GameRun } from '../godot/runs.js';
 import { log } from '../log.js';
 import { defineOp } from './types.js';
+
+/** How long run.start waits for the runtime's hello before returning. */
+const RUNTIME_WAIT_MS = 10_000;
 
 /** Can we open a window? On Linux without a display server, no. */
 function canShowWindow(): boolean {
@@ -37,19 +42,25 @@ export const runStart = defineOp({
     mode: z.enum(['auto', 'editor', 'process']).default('auto'),
     headless: z.boolean().optional().describe('Process mode only: no window. Defaults to true when no display is available.'),
     quit_after_frames: z.number().int().min(1).optional().describe('Process mode only: quit automatically after N frames (handy for smoke tests).'),
+    breakpoints: z.array(z.string()).optional().describe('Process mode: breakpoints set before the first frame, e.g. ["res://player.gd:42"]. Inspect with godot_debug_state.'),
+    break_on_errors: z.boolean().optional().describe('Process mode: stop at script errors like the editor does (default false: errors are recorded, the game keeps running).'),
+    write_movie: z.string().optional().describe('Process mode: record frames to this file with Godot\'s Movie Maker (.avi, or .png for an image sequence), e.g. "user://capture.avi". Needs a window.'),
   }),
   readOnly: false,
   destructive: false,
   core: true,
-  async run({ scene, mode, headless, quit_after_frames }, ctx) {
-    const useEditor = mode === 'editor' || (mode === 'auto' && (await ctx.bridge.ensureConnected()));
+  async run({ scene, mode, headless, quit_after_frames, breakpoints, break_on_errors, write_movie }, ctx) {
+    // Debug and movie options need a process run (the server is that game's debugger).
+    const needsProcess = Boolean(breakpoints?.length || break_on_errors || write_movie);
+    if (mode === 'editor' && needsProcess) throw new OpError('BAD_PARAMS', 'breakpoints, break_on_errors and write_movie work with mode "process" (the server launches and debugs the game itself).');
+    const useEditor = mode === 'editor' || (mode === 'auto' && !needsProcess && (await ctx.bridge.ensureConnected()));
     if (useEditor) {
       const result = await ctx.bridge.request('run.play', { scene: scene ?? 'main' });
       return {
         data: {
           ...(result as object),
           mode: 'editor',
-          note: 'Started in the editor. Game output shows in the editor Output panel; runtime log capture arrives in a later version.',
+          note: 'Started in the editor. godot_game_* tools work on it once its runtime loads; its output shows in the editor Output panel (godot_editor_logs).',
         },
       };
     }
@@ -58,14 +69,43 @@ export const runStart = defineOp({
     const godot = await findGodot(ctx.config.godotPath);
     if (!godot) throw new OpError('GODOT_NOT_FOUND', GODOT_NOT_FOUND_HINT);
     const extraArgs = quit_after_frames ? ['--quit-after', String(quit_after_frames)] : [];
-    const run = ctx.runs.start(godot.path, ctx.config.projectPath, {
+    if (write_movie) extraArgs.push('--write-movie', write_movie);
+    if (write_movie && (headless ?? !canShowWindow())) throw new OpError('BAD_PARAMS', 'write_movie needs a window (headless: false and a display); headless runs render nothing.');
+    const run = await ctx.runs.start(godot.path, ctx.config.projectPath, {
       scene: scene && scene !== 'main' ? scene : undefined,
       headless: headless ?? !canShowWindow(),
       extraArgs,
+      breakpoints,
+      breakOnErrors: break_on_errors,
     });
-    // Give Godot a moment so immediate startup errors are already captured.
-    await new Promise((r) => setTimeout(r, 1500));
-    return { data: { run_id: run.id, mode: 'process', headless: run.headless, running: run.running, exit_code: run.exitCode, ...run.counts() } };
+    // Wait until the runtime says hello (the game is up and runtime tools work), the game
+    // exits, or a few seconds pass. Startup errors are captured either way.
+    const exited = new Promise<void>((r) => {
+      const poll = setInterval(() => {
+        if (!run.running) {
+          clearInterval(poll);
+          r();
+        }
+      }, 100);
+      setTimeout(() => clearInterval(poll), RUNTIME_WAIT_MS + 100);
+    });
+    const ready = await Promise.race([
+      run.channel!.ready.then(() => true),
+      exited.then(() => false),
+      new Promise<boolean>((r) => setTimeout(() => r(false), RUNTIME_WAIT_MS)),
+    ]);
+    return {
+      data: {
+        run_id: run.id,
+        mode: 'process',
+        headless: run.headless,
+        running: run.running,
+        exit_code: run.exitCode,
+        // true: godot_game_* tools can inspect and control this run.
+        runtime: ready,
+        ...run.counts(),
+      },
+    };
   },
 });
 
@@ -94,6 +134,45 @@ export const runStop = defineOp({
   },
 });
 
+/**
+ * run.output's errors view: the structured errors and warnings the game reported through
+ * the debugger (`run.errors`, each with its script backtrace), paged by error seq.
+ * Identical entries in a page (same text and stack, e.g. an error raised every frame) are
+ * merged into one with a `count`, so one noisy error can't fill the page.
+ */
+function errorPage(run: GameRun, since: number, limit: number, level: 'all' | 'warning' | 'error') {
+  const where = (f: { file: string; function: string; line: number }) => `${f.file}:${f.line} in ${f.function}()`;
+  let list = run.errors.filter((e) => e.seq >= since);
+  if (level === 'error') list = list.filter((e) => e.level === 'error');
+  const page = list.slice(0, limit);
+  const merged = new Map<string, Record<string, unknown>>();
+  for (const e of page) {
+    const stack = e.stack.map(where);
+    const key = JSON.stringify([e.level, e.message, e.detail, stack, stack.length ? '' : where(e.source)]);
+    const seen = merged.get(key);
+    if (seen) {
+      seen.count = Number(seen.count ?? 1) + 1;
+      continue;
+    }
+    merged.set(key, {
+      seq: e.seq,
+      ...(e.level === 'warning' ? { warning: true } : {}),
+      message: e.message,
+      ...(e.detail ? { detail: e.detail } : {}),
+      // The script line that raised it, then its callers (innermost first). The engine's
+      // C++ location only helps when no script was on the stack.
+      ...(stack.length ? { at: stack[0], ...(stack.length > 1 ? { callers: stack.slice(1) } : {}) } : { source: where(e.source) }),
+    });
+  }
+  return {
+    error_count: run.errors.filter((e) => e.level === 'error').length,
+    warning_count: run.errors.filter((e) => e.level === 'warning').length,
+    next: page.length > 0 ? page[page.length - 1]!.seq + 1 : since,
+    more: list.length > page.length,
+    errors: [...merged.values()],
+  };
+}
+
 export const runOutput = defineOp({
   name: 'run.output',
   group: 'run',
@@ -105,15 +184,17 @@ export const runOutput = defineOp({
     since: z.number().int().min(0).default(0),
     limit: z.number().int().min(1).max(2000).default(200),
     level: z.enum(['all', 'warning', 'error']).default('all'),
+    errors: z.boolean().optional().describe('Script errors with backtraces instead of lines (repeats merged).'),
   }),
   readOnly: true,
   idempotent: true,
   core: true,
-  async run({ run_id, since, limit, level }, ctx) {
+  async run({ run_id, since, limit, level, errors }, ctx) {
     const run = ctx.runs.get(run_id);
     if (!run) {
       throw new OpError('NOT_FOUND', run_id ? `No run with id "${run_id}".` : 'No game has been started by this server yet. Use godot_run_start (mode "process" to capture output).');
     }
+    if (errors) return { data: { run_id: run.id, running: run.running, exit_code: run.exitCode, ...errorPage(run, since, limit, level) } };
     const page = run.read(since, limit, level);
     return {
       data: {

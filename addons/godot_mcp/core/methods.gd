@@ -10,7 +10,7 @@ const SceneOps := preload("scene_ops.gd")
 ## (E) methods: need the running editor (edited scene, play controls, editor log, ...).
 const EDITOR_ONLY: PackedStringArray = [
 	"editor.status", "scene.open", "scene.save_as", "run.play", "run.stop",
-	"filesystem.refresh", "logs.read",
+	"filesystem.refresh", "logs.read", "game.send", "game.status",
 ]
 
 ## (E/H) methods: available in both the editor bridge and the headless runner.
@@ -45,6 +45,9 @@ const MODULES: Array = [
 	preload("../ops/world_ops.gd"),
 	preload("../ops/project_ops.gd"),
 	preload("../ops/export_ops.gd"),
+	# Step 3.
+	preload("../ops/editor_view_ops.gd"),
+	preload("../ops/editor_ui_ops.gd"),
 ]
 
 ## Built once per process from MODULES (static vars persist for the script's lifetime).

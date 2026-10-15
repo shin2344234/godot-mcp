@@ -60,6 +60,13 @@ func _dispatch(method: String, params: Variant) -> Dictionary:
 			return _scene_save_as(params)
 		"scene.create":
 			return _scene_create(params)
+		"game.send":
+			return _game_send(params)
+		"game.status":
+			var relay: Variant = _plugin.get_game_relay() if _plugin != null and _plugin.has_method("get_game_relay") else null
+			if relay == null:
+				return R.ok({"sessions": []})
+			return relay.status()
 		"run.play":
 			return _run_play(params)
 		"run.stop":
@@ -334,6 +341,20 @@ func _run_play(params: Dictionary) -> Dictionary:
 				return ResPaths.scene_not_found(scene_path)
 			EditorInterface.play_custom_scene(scene_path)
 	return R.ok({"playing": EditorInterface.is_playing_scene(), "scene": scene_path})
+
+
+## [runtime] game.send {session?: int, command: String, data?: Array}: sends a debugger
+## message to a game started from this editor (see editor/game_relay.gd).
+func _game_send(params: Variant) -> Dictionary:
+	var p: Dictionary = params if params is Dictionary else {}
+	var relay: Variant = _plugin.get_game_relay() if _plugin != null and _plugin.has_method("get_game_relay") else null
+	if relay == null:
+		return R.err("GAME_NOT_RUNNING", "This editor has no game relay (plugin not fully started).")
+	var command: String = str(p.get("command", ""))
+	if not command.contains(":") and not command in ["step", "next", "out", "continue", "get_stack_dump", "get_stack_frame_vars", "evaluate"]:
+		return R.err(R.BAD_PARAMS, "game.send: '%s' is not a debugger command." % command)
+	var data: Variant = p.get("data", [])
+	return relay.send(int(p.get("session", -1)), command, data if data is Array else [])
 
 
 func _filesystem_refresh(params: Dictionary) -> Dictionary:
