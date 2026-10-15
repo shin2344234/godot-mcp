@@ -26,6 +26,11 @@ const MAX_SAMPLE_SECONDS: float = 30.0
 const MAX_SAMPLES: int = 200000
 ## How many spike frames game.perf lists (the worst ones, in time order).
 const MAX_SPIKES: int = 10
+## compare_to diffs the full-resolution capture (not the max_size preview), so max_size only
+## affects what is returned, never how precise the diff is. Only captures bigger than this
+## many pixels (1920x1080) are scaled down for the diff, to keep the GDScript pixel loop
+## around half a second at most.
+const MAX_COMPARE_PIXELS: int = 1920 * 1080
 ## How long to wait for the next drawn frame before capturing whatever is there (low
 ## processor mode or an occluded window may not draw for a while).
 const FRAME_WAIT_SECONDS: float = 0.5
@@ -169,6 +174,25 @@ static func process_image(img: Image, params: Dictionary, label: String) -> Dict
 			return saved
 		result["saved_to"] = save_to
 
+	# Compare BEFORE the preview is scaled down: the diff runs on the full-resolution
+	# (cropped) capture, so a small max_size doesn't make it miss small changes. Earlier
+	# versions diffed the scaled preview, which made the result depend on max_size.
+	# Only very large captures are reduced for the diff (MAX_COMPARE_PIXELS).
+	var compare_to: String = str(params.get("compare_to", "")).strip_edges()
+	if not compare_to.is_empty():
+		var tolerance: int = clampi(int(params.get("tolerance", DEFAULT_TOLERANCE)), 0, 255)
+		var cmp_img: Image = img
+		var cmp_scale: float = 1.0
+		var pixels: int = img.get_width() * img.get_height()
+		if pixels > MAX_COMPARE_PIXELS:
+			cmp_scale = sqrt(float(MAX_COMPARE_PIXELS) / float(pixels))
+			cmp_img = img.duplicate() as Image
+			cmp_img.resize(maxi(1, roundi(img.get_width() * cmp_scale)), maxi(1, roundi(img.get_height() * cmp_scale)), Image.INTERPOLATE_LANCZOS)
+		var diff: Dictionary = compare_images(cmp_img, compare_to, tolerance, cmp_scale, offset)
+		if R.is_err(diff):
+			return diff
+		result["diff"] = diff["value"]
+
 	# Scale down so the longest side fits max_size (never up).
 	var max_size: int = clampi(int(params.get("max_size", DEFAULT_MAX_SIZE)), 16, MAX_MAX_SIZE)
 	var scale: float = 1.0
@@ -177,14 +201,6 @@ static func process_image(img: Image, params: Dictionary, label: String) -> Dict
 		scale = float(max_size) / float(longest)
 		img = img.duplicate() as Image
 		img.resize(maxi(1, roundi(img.get_width() * scale)), maxi(1, roundi(img.get_height() * scale)), Image.INTERPOLATE_LANCZOS)
-
-	var compare_to: String = str(params.get("compare_to", "")).strip_edges()
-	if not compare_to.is_empty():
-		var tolerance: int = clampi(int(params.get("tolerance", DEFAULT_TOLERANCE)), 0, 255)
-		var diff: Dictionary = compare_images(img, compare_to, tolerance, scale, offset)
-		if R.is_err(diff):
-			return diff
-		result["diff"] = diff["value"]
 
 	var bytes: PackedByteArray
 	var mime: String = "image/png"
@@ -250,10 +266,11 @@ static func load_image_file(path: String) -> Dictionary:
 	return R.value(img)
 
 
-## Compares `current` (the returned, possibly scaled image) with the image at `path`
-## (scaled to the same size if needed). A pixel counts as changed when any channel differs
-## by more than `tolerance`. changed_rect is in source viewport pixels (scale and region
-## offset undone), so it can be passed back as a region.
+## Compares `current` (the full-resolution capture, cropped to the region; reduced only
+## when over MAX_COMPARE_PIXELS, then `scale` < 1) with the image at `path` (scaled to the
+## same size if needed). A pixel counts as changed when any channel differs by more than
+## `tolerance`. changed_rect is in source viewport pixels (scale and region offset undone),
+## so it can be passed back as a region.
 static func compare_images(current: Image, path: String, tolerance: int, scale: float, offset: Vector2i) -> Dictionary:
 	var loaded: Dictionary = load_image_file(path)
 	if R.is_err(loaded):
@@ -281,8 +298,8 @@ static func compare_images(current: Image, path: String, tolerance: int, scale: 
 	var max_x: int = -1
 	var max_y: int = -1
 	var i: int = 0
-	# Plain loop over the RGBA bytes (much faster than get_pixel). The compared image is the
-	# scaled one (default <= 768 px), which keeps this to a fraction of a second.
+	# Plain loop over the RGBA bytes (much faster than get_pixel). At most MAX_COMPARE_PIXELS
+	# pixels (about half a second for 1920x1080 on the test machine).
 	for y: int in h:
 		for x: int in w:
 			if absi(a[i] - b[i]) > tolerance or absi(a[i + 1] - b[i + 1]) > tolerance \
@@ -319,8 +336,15 @@ static func compare_images(current: Image, path: String, tolerance: int, scale: 
 # ---------------------------------------------------------------------------------------
 
 ## Performance monitor snapshot, plus per-frame sampling when params.sample_seconds > 0.
+## params.monitors = false leaves the full snapshot out (the server does that when only a
+## sample/profile was asked for, so repeated sampling calls don't repeat ~40 values each
+## time); a one-line "fps" stays so the result still says how fast the game runs.
 static func perf(rt: Node, params: Dictionary) -> Dictionary:
-	var out: Dictionary = {"monitors": snapshot()}
+	var out: Dictionary = {}
+	if bool(params.get("monitors", true)):
+		out["monitors"] = snapshot()
+	else:
+		out["fps"] = _mon(Performance.TIME_FPS)
 	var seconds: float = float(params.get("sample_seconds", 0.0))
 	if seconds > 0.0:
 		out["sample"] = await _sample(rt.get_tree(), minf(seconds, MAX_SAMPLE_SECONDS))
@@ -426,7 +450,15 @@ static func snapshot() -> Dictionary:
 	return out
 
 
-## Adds group `key` (name -> monitor) to `out` unless every value is zero.
+## Groups that have been non-zero at least once in this game (see _add_nonzero).
+static var _seen_groups: Dictionary = {}
+
+
+## Adds group `key` (name -> monitor) to `out` unless every value is zero AND it never was
+## non-zero before in this game. Once a group has shown up it stays in every later snapshot
+## (with zeros when that is the current value): physics counts such as active objects and
+## islands drop to 0 whenever every body sleeps, and a group that came and went between
+## calls looked like the tool had lost it (physics_3d was "dropped" by a sampling call).
 static func _add_nonzero(out: Dictionary, key: String, monitors: Dictionary) -> void:
 	var group: Dictionary = {}
 	var any: bool = false
@@ -435,6 +467,8 @@ static func _add_nonzero(out: Dictionary, key: String, monitors: Dictionary) -> 
 		group[name] = v
 		any = any or v != 0
 	if any:
+		_seen_groups[key] = true
+	if any or _seen_groups.has(key):
 		out[key] = group
 
 
