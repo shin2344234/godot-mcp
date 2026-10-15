@@ -11,6 +11,18 @@ extends EditorPlugin
 ##
 ## The server is polled from _process() on the main thread, because editor APIs are not
 ## thread-safe.
+##
+## [code/docs area] LSP-only mode: the MCP server may start a private headless editor just
+## for the GDScript language server (server/src/lsp/manager.ts), with the user arguments
+## `-- --godot-mcp-lsp-only --godot-mcp-lsp-port=<port>`. In that mode the session goes to
+## lsp_session.json instead of session.json, so the server never routes scene edits into
+## that invisible editor. The server keeps one bridge connection open to it for as long as
+## it wants the editor; when no client has been connected for a while (the server exited,
+## even if it was killed with SIGKILL and could not clean up) the editor quits by itself,
+## so no orphaned Godot process is left behind. (OS.is_process_running() cannot be used
+## for this: on Unix it only works for child processes, not for the parent.)
+## In every mode the session file and the welcome payload report `lsp_port`, the port of
+## this editor's GDScript language server.
 
 const Constants := preload("core/constants.gd")
 const LogBuffer := preload("core/log_buffer.gd")
@@ -22,8 +34,24 @@ var _logs: LogBuffer
 var _backend: EditorBackend
 var _server: BridgeServer
 
+## [code/docs area] LSP-only mode flags (see the header comment).
+const LSP_ONLY_ARG: String = "--godot-mcp-lsp-only"
+## Godot consumes `--lsp-port` itself and does not expose it to scripts, so the server repeats
+## the port in this user argument for the session file.
+const LSP_PORT_ARG: String = "--godot-mcp-lsp-port="
+const DEFAULT_LSP_PORT: int = 6005
+## LSP-only watchdog: quit after this long without any bridge client...
+const ORPHAN_TIMEOUT_SEC: float = 15.0
+## ...or this long after startup if the server never connected at all.
+const FIRST_CLIENT_TIMEOUT_SEC: float = 120.0
+var _lsp_only: bool = false
+var _lsp_port_arg: int = 0
+var _had_client: bool = false
+var _no_client_sec: float = 0.0
+
 
 func _enter_tree() -> void:
+	_parse_user_args()
 	_register_settings()
 
 	_logs = LogBuffer.new(2000)
@@ -38,10 +66,10 @@ func _enter_tree() -> void:
 			[base_port, base_port + Constants.PORT_FALLBACK_COUNT, error_string(err), Constants.PORT_SETTING])
 		set_process(false)
 		return
-	var write_err: int = SessionFile.write(_server.port, _server.token)
+	var write_err: int = SessionFile.write(_server.port, _server.token, _session_file(), {"lsp_port": _lsp_port(), "lsp_only": _lsp_only})
 	if write_err != OK:
 		push_error("Godot MCP: bridge is listening on port %d but writing %s failed (%s); the MCP server will not find this editor." %
-			[_server.port, Constants.SESSION_FILE, error_string(write_err)])
+			[_server.port, _session_file(), error_string(write_err)])
 	print("Godot MCP: bridge listening on 127.0.0.1:%d" % _server.port)
 	set_process(true)
 
@@ -51,16 +79,55 @@ func _exit_tree() -> void:
 	if _server != null:
 		_server.stop()
 		_server = null
-	SessionFile.remove()
+	SessionFile.remove(_session_file())
 	if _logs != null:
 		OS.remove_logger(_logs)
 		_logs = null
 	_backend = null
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if _server != null:
 		_server.poll()
+	# [code/docs area] A private LSP editor must not outlive the MCP server that started it.
+	if _lsp_only and _server != null:
+		if _server.client_count() > 0:
+			_had_client = true
+			_no_client_sec = 0.0
+		else:
+			_no_client_sec += delta
+			var limit: float = ORPHAN_TIMEOUT_SEC if _had_client else FIRST_CLIENT_TIMEOUT_SEC
+			if _no_client_sec > limit:
+				print("Godot MCP: no MCP server connected for %d s; closing this LSP-only editor." % int(_no_client_sec))
+				_lsp_only = false # quit once
+				get_tree().quit()
+
+
+## [code/docs area] Reads the LSP-only flags from the user arguments (after `--`).
+func _parse_user_args() -> void:
+	for arg: String in OS.get_cmdline_user_args():
+		if arg == LSP_ONLY_ARG:
+			_lsp_only = true
+		elif arg.begins_with(LSP_PORT_ARG) and arg.trim_prefix(LSP_PORT_ARG).is_valid_int():
+			_lsp_port_arg = arg.trim_prefix(LSP_PORT_ARG).to_int()
+
+
+## [code/docs area] Which session file this editor owns (session.json, or lsp_session.json
+## in LSP-only mode).
+func _session_file() -> String:
+	return SessionFile.LSP_SESSION_FILE if _lsp_only else Constants.SESSION_FILE
+
+
+## [code/docs area] Port of this editor's GDScript language server: the server-provided
+## override (LSP_PORT_ARG) if present, else the `network/language_server/remote_port` editor
+## setting. The MCP server only ever connects to it on 127.0.0.1.
+func _lsp_port() -> int:
+	if _lsp_port_arg > 0:
+		return _lsp_port_arg
+	var settings: EditorSettings = EditorInterface.get_editor_settings()
+	if settings != null and settings.has_setting("network/language_server/remote_port"):
+		return int(settings.get_setting("network/language_server/remote_port"))
+	return DEFAULT_LSP_PORT
 
 
 func _register_settings() -> void:
@@ -83,4 +150,7 @@ func _welcome_payload() -> Dictionary:
 		"plugin_version": Constants.PLUGIN_VERSION,
 		"project_path": Constants.project_path(),
 		"project_name": Constants.project_name(),
+		# [code/docs area] lets the MCP server talk to this editor's language server.
+		"lsp_port": _lsp_port(),
+		"lsp_only": _lsp_only,
 	}
