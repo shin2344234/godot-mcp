@@ -1,0 +1,47 @@
+{
+  "name": "@shin2344234/godot-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for the Godot 4 engine: edit scenes, nodes and scripts, run the game and read errors, through a live editor bridge or headless Godot.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "godot-mcp": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist",
+    "addon"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:unit": "vitest run test/unit",
+    "test:e2e": "vitest run test/e2e",
+    "prepack": "npm run build && node scripts/copy-addon.mjs"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "godot",
+    "godot4",
+    "gamedev"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.3.1",
+    "add-mcp": "^2.4.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "^2.3.1",
+    "@types/node": "^26.6.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.4"
+  }
+}
