@@ -38,7 +38,7 @@ export const projectSet = defineOp({
  */
 const inputEvent = z
   .union([z.string(), z.record(z.string(), z.unknown())])
-  .describe('Key name ("Space", "Ctrl+S") or {type: key|mouse_button|joy_button|joy_axis, key, button ("left", "a"), axis ("left_x"), value (-1/1), physical, ctrl, shift, alt, meta, device}.');
+  .describe('Key name ("R", "Ctrl+S"; a physical key, i.e. layout position) or {type: key|mouse_button|joy_button|joy_axis, key, button ("left", "a"), axis ("left_x"), value (-1/1), physical (false: by keycode), ctrl, shift, alt, meta, device}.');
 
 export const inputEdit = defineOp({
   name: 'input.edit',
