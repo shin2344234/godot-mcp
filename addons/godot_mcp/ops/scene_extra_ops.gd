@@ -30,6 +30,7 @@ const ChangeSet := preload("../core/change_set.gd")
 const SceneOps := preload("../core/scene_ops.gd")
 const SceneBatch := preload("../core/scene_batch.gd")
 const ResSave := preload("../core/res_save.gd")
+const EditorScenes := preload("../core/editor_scenes.gd")
 
 ## node.find default and hard caps on returned matches.
 const FIND_DEFAULT_LIMIT: int = 100
@@ -459,7 +460,8 @@ static func do_scene_close(params: Variant, env: Dictionary) -> Dictionary:
 	var ei: Object = env.get("interface")
 	if ei == null:
 		return R.err(R.UNSUPPORTED, "scene.close needs the live Godot editor.")
-	var open_scenes: PackedStringArray = ei.call(&"get_open_scenes")
+	# Real tab paths: the editor's own list keeps the old path after scene.save_as.
+	var open_scenes: PackedStringArray = EditorScenes.open_scenes(ei)
 	var path: String = ""
 	if raw.is_empty():
 		var current: Node = ei.call(&"get_edited_scene_root")
@@ -477,7 +479,9 @@ static func do_scene_close(params: Variant, env: Dictionary) -> Dictionary:
 		var switched: Dictionary = (env["edited_root"] as Callable).call({"scene": path})
 		if R.is_err(switched):
 			return switched
-	var unsaved: bool = path.is_empty() or path in (ei.call(&"get_unsaved_scenes") as PackedStringArray)
+	# By tab (root), not by path: after scene.save_as the editor's unsaved list still names
+	# the old file, and a path lookup reported discarded_changes: false for a dirty scene.
+	var unsaved: bool = path.is_empty() or EditorScenes.current_is_unsaved(ei)
 	var saved: bool = false
 	if unsaved and not save and not discard:
 		return R.err(R.CONFLICT, "scene.close: '%s' has unsaved changes. Pass save: true to save before closing, or discard: true to drop the changes." % (path if not path.is_empty() else "the edited scene (never saved)"))

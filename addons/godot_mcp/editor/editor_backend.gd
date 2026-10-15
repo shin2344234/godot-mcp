@@ -18,6 +18,7 @@ const ScriptValidate := preload("../core/script_validate.gd")
 const ResPaths := preload("../core/res_paths.gd")
 const ChangeSet := preload("../core/change_set.gd")
 const LogBuffer := preload("../core/log_buffer.gd")
+const EditorScenes := preload("../core/editor_scenes.gd")
 
 var _logs: LogBuffer
 ## The EditorPlugin that owns this backend (for add_autoload_singleton and friends).
@@ -159,17 +160,16 @@ func status() -> Dictionary:
 		playing = null
 	# EditorInterface.get_unsaved_scenes() only exists since Godot 4.7. Calling it directly
 	# is a parse error on 4.5/4.6, which would stop the whole plugin from loading there,
-	# so look it up at runtime (as editor_ui_ops.gd and scene_extra_ops.gd do).
-	var unsaved: Array = []
-	if EditorInterface.has_method(&"get_unsaved_scenes"):
-		unsaved = Array(EditorInterface.call(&"get_unsaved_scenes"))
+	# so EditorScenes looks it up at runtime. EditorScenes also maps the editor's cached
+	# tab paths to the real ones, which differ after scene.save_as (see core/editor_scenes.gd).
+	var unsaved: Array = Array(EditorScenes.unsaved_scenes(EditorInterface))
 	return {
 		"godot_version": Constants.godot_version_string(),
 		"plugin_version": Constants.PLUGIN_VERSION,
 		"project_name": Constants.project_name(),
 		"project_path": Constants.project_path(),
 		"edited_scene": _scene_path_or_null(edited),
-		"open_scenes": Array(EditorInterface.get_open_scenes()),
+		"open_scenes": Array(EditorScenes.open_scenes(EditorInterface)),
 		"unsaved_scenes": unsaved,
 		"is_playing": EditorInterface.is_playing_scene(),
 		"playing_scene": playing,
@@ -258,8 +258,9 @@ func _scene_save(params: Dictionary) -> Dictionary:
 		if R.is_err(norm):
 			return norm
 		var path: String = norm["value"]
-		if not path in EditorInterface.get_open_scenes():
-			return R.err(R.NOT_FOUND, "scene.save: '%s' is not open in the editor, so there is nothing to save. Open scenes: %s." % [path, ", ".join(EditorInterface.get_open_scenes())])
+		var open_paths: PackedStringArray = EditorScenes.open_scenes(EditorInterface)
+		if not path in open_paths:
+			return R.err(R.NOT_FOUND, "scene.save: '%s' is not open in the editor, so there is nothing to save. Open scenes: %s." % [path, ", ".join(open_paths)])
 		var opened: Dictionary = _open_scene(path, "path")
 		if R.is_err(opened):
 			return opened
