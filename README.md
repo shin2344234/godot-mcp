@@ -65,7 +65,7 @@ Then open the project in Godot and start a new agent session.
 | Flag / env var | Default | Meaning |
 |---|---|---|
 | `--project` / `GODOT_PROJECT_PATH` | current folder | Godot project folder |
-| `--godot` / `GODOT_PATH` | searched on PATH | Godot 4 executable |
+| `--godot` / `GODOT_PATH` | searched on PATH | Godot 4 executable. On Windows, point it at the main `Godot_v4.x-stable_win64.exe`, not the small `_console.exe` launcher, which can fail under load (the server reads output through pipes either way) |
 | `--mode` / `GODOT_MCP_MODE` | `full` | `full`: every operation is a tool. `compact`: core tools plus `godot_tools`, `godot_call_read` and `godot_call_write` |
 | `--toolsets` / `GODOT_MCP_TOOLSETS` | all | Comma list of the groups in the tools table below, e.g. `core,files,scene,node,script,run` |
 | `--read-only` / `GODOT_MCP_READ_ONLY` | off | Hide every tool that changes something |
