@@ -62,7 +62,7 @@ static func read(params: Variant, _env: Dictionary) -> Dictionary:
 	var out: Dictionary = {
 		"path": path,
 		"class": res.get_class(),
-		"uid": where["uid"] if not str(where["uid"]).is_empty() else null,
+		"uid": RU.or_null(str(where["uid"])),
 		"resource_path": res.resource_path,
 	}
 	var script: Script = res.get_script() as Script
@@ -175,7 +175,7 @@ static func create(params: Variant, env: Dictionary) -> Dictionary:
 		uid = RU.uid_text(path)
 		if uid.is_empty():
 			uid = RU.assign_uid(path)
-	var out: Dictionary = {"path": path, "type": res.get_class(), "uid": uid if not uid.is_empty() else null, "properties_set": applied}
+	var out: Dictionary = {"path": path, "type": res.get_class(), "uid": RU.or_null(uid), "properties_set": applied}
 	if existed:
 		out["overwritten"] = true
 	return R.ok(out)
@@ -278,11 +278,11 @@ static func deps(params: Variant, _env: Dictionary) -> Dictionary:
 		var d: Dictionary = RU.parse_dependency(dep)
 		var dpath: String = d["path"]
 		var exists: bool = not dpath.is_empty() and ResPaths.file_exists(dpath)
-		var entry: Dictionary = {"path": dpath, "uid": d["uid"] if not str(d["uid"]).is_empty() else null, "type": RU.file_type(dpath) if exists else null, "exists": exists}
+		var entry: Dictionary = {"path": dpath, "uid": RU.or_null(str(d["uid"])), "type": RU.or_null(RU.file_type(dpath) if exists else ""), "exists": exists}
 		dependencies.append(entry)
 		if not exists:
 			missing.append(entry)
-	var out: Dictionary = {"path": path, "uid": uid if not uid.is_empty() else null, "type": RU.file_type(path), "dependencies": dependencies, "missing": missing}
+	var out: Dictionary = {"path": path, "uid": RU.or_null(uid), "type": RU.file_type(path), "dependencies": dependencies, "missing": missing}
 	if want_dependents:
 		var found: Array = []
 		var state: Dictionary = {"visited": 0, "truncated": false}

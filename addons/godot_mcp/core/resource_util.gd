@@ -344,3 +344,10 @@ static func theme_items(theme: Theme, depth: int, max_types: int = 60) -> Dictio
 	if types.size() > max_types:
 		out["…"] = "(+%d more types)" % (types.size() - max_types)
 	return out
+
+
+## "" -> null: JSON null reads better than an empty string for "no uid" / "unknown type".
+static func or_null(s: String) -> Variant:
+	if s.is_empty():
+		return null
+	return s
