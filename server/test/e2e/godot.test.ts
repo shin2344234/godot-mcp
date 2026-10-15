@@ -27,7 +27,7 @@ describe.skipIf(!enabled)('headless backend', () => {
   let client: Awaited<ReturnType<typeof startServer>>;
 
   beforeAll(async () => {
-    importProject(proj.dir);
+    // No manual import here: the server must import a fresh project by itself.
     client = await startServer({ project: proj.dir, era: 'modern' });
   }, 240_000);
   afterAll(async () => {

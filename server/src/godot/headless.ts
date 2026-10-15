@@ -82,6 +82,14 @@ export class HeadlessRunner {
       );
     }
 
+    // A never-opened project has no .godot/ cache: global classes (class_name)
+    // aren't registered and resources aren't imported, so the runner would
+    // misbehave. Import once first (the same thing opening the editor does).
+    if (!existsSync(path.join(this.projectPath, '.godot'))) {
+      log.info('Project has no .godot/ cache yet; running a one-time import');
+      await runProcess(godot.path, ['--headless', '--path', this.projectPath, '--import'], { cwd: this.projectPath, timeoutMs: Math.max(this.timeoutMs, 300_000) });
+    }
+
     // Params go through a temp file rather than argv: avoids quoting problems
     // (Windows shells in particular) and command-line length limits.
     const dir = await mkdtemp(path.join(os.tmpdir(), 'godot-mcp-'));

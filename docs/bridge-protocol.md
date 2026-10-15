@@ -286,8 +286,13 @@ Create a `GDScript`, set `source_code`, `resource_path` (when path given, use
 reload; remove it after). Result:
 
 ```json
-{ "valid": false, "errors": [ { "line": 12, "column": 5, "message": "Identifier \"foo\" not declared in the current scope." } ] }
+{ "valid": false, "errors": [ { "line": 12, "message": "Identifier \"foo\" not declared in the current scope." } ] }
 ```
+
+*Godot limitation:* the GDScript compiler reports only a line number per error (no column), so
+errors have no `column`. After the first **syntax** error the parser stops (analyzer/type
+errors are all reported). An error that comes from a script this one depends on
+(`preload`/`extends`) carries an extra `"file": "res://dep.gd"`.
 
 ### scene.create (E/H)
 
@@ -346,3 +351,55 @@ output arrives with the runtime bridge in step 3.)
 ### ping (E/H)
 
 params: `{}` → `{ "pong": true }`
+
+## 6. Implementation notes (GDScript side, plugin 0.1.0)
+
+Clarifications of how `addons/godot_mcp` implements the contract above. Fields marked
+"extra" are additions; clients must ignore unknown fields.
+
+* **Mutation results** (`node.add/set/remove/rename/reparent/duplicate`, `script.attach`)
+  carry extra `"scene": "res://..."` and `"saved"`: `true` headless (the runner saves after
+  every call), `false` in the editor (the change is an undoable edit; call `scene.save`).
+* `node.add` extra fields: `"instance"` (when instancing) and `"renamed_from"` (when the
+  requested name collided and the node was auto-renamed editor-style, `Enemy` → `Enemy2`).
+  `node.duplicate` and `node.reparent` auto-rename the same way; `node.rename` returns
+  `CONFLICT` with `data.suggestion` instead.
+* `node.set` extra `"warnings"`: present when a value reads back differently from what was
+  requested (Godot clamped/adjusted it). `node.set` refuses `name` (use `node.rename`).
+* Nodes inside an instanced sub-scene (without "Editable Children") can be read but not
+  modified: mutations return `BAD_PARAMS` with `data.instance_scene` / `data.path_in_instance`
+  telling the client to edit the sub-scene instead (Godot would silently drop such changes
+  on save).
+* `scene.tree`: `depth` defaults to unlimited (bounded by `max_nodes`, default 300). Node
+  entries may carry extra `"script_class"` (global class name), `"inside_instance"` and, for
+  the root of an inherited scene, `"inherits"`. A node's `truncated` is true when any of its
+  children were omitted (depth or `max_nodes`). `include_properties` returns only stored
+  properties that differ from the class/script default.
+* `node.get`: `signals_connected[].target` is relative to the **scene root** (like every
+  path in results; `"."` = root), and only persistent (scene-saved) connections are listed.
+  Extra fields: `"children"` (names), `"groups"`, `"instance"`.
+* Value encoding extra: a top-level embedded resource also gets `"properties"` (its stored
+  properties, encoded one level deep), so e.g. a `RectangleShape2D`'s `size` is visible.
+  Non-finite floats encode as `"inf"`, `"-inf"`, `"nan"`. All JSON text escapes control
+  characters (Godot's `JSON.stringify` does not), so strict parsers accept it.
+* Value decoding extras: `{"resource": "res://..."}` (the encoder's own form) loads a
+  resource; `{"node": "Path"}` or a path string sets Node-typed exports; for `NodePath`
+  properties a plain string is used as-is (relative to the node, like the inspector) while
+  `{"node": "Path/From/Root"}` is converted to a path relative to the node.
+  `"metadata/<name>"` properties are accepted by `node.set`.
+* `scene.save` headless: `{"saved": null, "note": ...}` without `path`; with `path` it
+  checks the file exists and echoes it.
+* `scene.create` extra result fields: `"root_type"`, `"root_name"` (defaults to the file
+  name in PascalCase), and in the editor `"opened"`.
+* `logs.read`: `level: "warning"` returns warnings **and** errors. Entries from engine errors
+  carry `"kind"` (`error`, `warning`, `script_error`, `shader_error`) plus `file`, `line`,
+  `function`; `print()` output has level `info` (`printerr()` → `error`). ANSI color codes are
+  stripped. `next` is the `since` value for the next call.
+* `ping` extra: `"backend": "editor" | "headless"`. `filesystem.refresh` extra:
+  `"full_scan": true` when no paths were given.
+* Runtime script errors inside the addon (bugs) are reported as `INTERNAL` with
+  `data.engine_errors`, instead of returning a half-built result.
+* The session file is written atomically (temp file + rename) with mode 0600 where
+  supported, and is only deleted by the editor process that wrote it (pid check). A
+  killed editor (SIGKILL/SIGTERM) leaves a stale file behind: check `pid` and that the
+  connection succeeds.
