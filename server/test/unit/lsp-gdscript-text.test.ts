@@ -1,7 +1,7 @@
 /** Comment/string masking used to drop the language server's false rename/reference hits. */
 
 import { describe, expect, it } from 'vitest';
-import { findIdentifier, GdMask, isIdentifier } from '../../src/lsp/gdscriptText.js';
+import { completionHint, findIdentifier, GdMask, isIdentifier } from '../../src/lsp/gdscriptText.js';
 
 const src = [
   'extends Node', // 0
@@ -63,5 +63,20 @@ describe('findIdentifier', () => {
     expect(isIdentifier('add_points2')).toBe(true);
     expect(isIdentifier('2fast')).toBe(false);
     expect(isIdentifier('a-b')).toBe(false);
+  });
+});
+
+describe('completionHint', () => {
+  const src = 'extends Node\n\nvar speed := 1.0 # tune me\n\nfunc _ready() -> void:\n\tpass\n';
+  it('is silent when there are items', () => {
+    expect(completionHint(src, 5, 1, 10, 3, '')).toBeUndefined();
+  });
+  it('explains a prefix that filtered everything out', () => {
+    expect(completionHint(src, 5, 3, 120, 0, 'pz')).toMatch(/120 items .*"pz"/);
+  });
+  it('explains positions with no completion context', () => {
+    expect(completionHint(src, 3, 0, 0, 0, '')).toMatch(/script level/);
+    expect(completionHint(src, 2, 26, 0, 0, '')).toMatch(/inside a comment/);
+    expect(completionHint(src, 5, 1, 0, 0, '')).toMatch(/partial identifier/);
   });
 });

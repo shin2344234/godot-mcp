@@ -117,3 +117,24 @@ export function findIdentifier(line: string, word: string, prefix = false): numb
 export function isIdentifier(name: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
 }
+
+/**
+ * Why code.lookup completion came back empty, as a hint for the model (MCP_TEST_LOG: line
+ * 24, column 1 gave 0 items and no explanation). `total` is what Godot returned before
+ * prefix filtering, `matching` what is left after it; `line`/`character` are 0-based.
+ */
+export function completionHint(text: string, line: number, character: number, total: number, matching: number, prefix: string): string | undefined {
+  if (matching > 0) return undefined;
+  if (total > 0) return `None of the ${total} items Godot offers here starts with or contains "${prefix}". Check the spelling, or point before it to see everything in scope.`;
+  const mask = GdMask.build(text);
+  // At the end of a comment the cursor sits just past its last character.
+  const kind = mask.kindAt(line, character) ?? (character > 0 ? mask.kindAt(line, character - 1) : undefined);
+  if (kind) return `The position is inside a ${kind}; Godot offers no completion there.`;
+  const lineText = text.split(/\r?\n/)[line] ?? '';
+  // Script level (no indentation): Godot completes inside function bodies and after a "."
+  // or a partial identifier; between declarations it has nothing to offer.
+  if (!/^\s/.test(lineText) && lineText.slice(0, character).trim() === '') {
+    return 'No completion context: the position is at script level, outside any function. Point inside a function body, after a partial identifier or a "." (e.g. symbol "velocity" or "position.").';
+  }
+  return 'Godot offered no completion here. Point right after a partial identifier or a "." inside a function; a parse error earlier in the file also stops completion (see godot_code_diagnostics).';
+}

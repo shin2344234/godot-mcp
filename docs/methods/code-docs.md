@@ -103,7 +103,7 @@ for `completion` it may be a prefix, for `signature` the cursor goes after the f
 `(`). Results: hover `{ markdown }`; definition `{ locations: [{ path, line, column, text }] }`
 or `{ native: true, signature, docs, hint }`; references `{ count, locations, note? }`;
 highlight `{ positions }`; signature `{ signatures: [{ label, doc? }], active_parameter }`;
-completion `{ prefix?, total, matching, items: [{ label, kind }] }`.
+completion `{ prefix?, total, matching, items: [{ label, kind }], hint? }` (`hint` explains an empty list: prefix matched nothing, inside a comment/string, or script level outside a function).
 
 ### code.rename (write, not destructive, not idempotent)
 
