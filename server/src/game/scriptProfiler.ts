@@ -23,7 +23,10 @@
  *   - GDScript signatures look like "res://player.gd::42::_process"
  *     (path, first line of the function's body, name; "Class.method" for
  *     inner classes). Checked with a real 4.7.2 game: a `func` on line 9
- *     reports line 10.
+ *     reports line 10. Everything else (godot_code_symbols, breakpoint
+ *     warnings, the script editor) talks about the `func` line, so when the
+ *     caller can read the script we move each line back to its declaration
+ *     (declarationLine below); the body line Godot sent stays as body_line.
  *
  * Why process runs only: in an editor run the game talks to the editor's own
  * debugger, whose ScriptEditorDebugger consumes `servers:*` messages; the
@@ -47,8 +50,13 @@ const TOTAL_WAIT_MS = 5_000;
 export interface ScriptFunctionStat {
   function: string;
   file: string;
-  /** First line of the function's body (what Godot puts in the signature). */
+  /**
+   * The `func` declaration line when the script could be read (see declarationLine),
+   * otherwise the first line of the function's body (what Godot puts in the signature).
+   */
   line: number;
+  /** The body line Godot reported, only when `line` was moved to the declaration. */
+  body_line?: number;
   calls: number;
   /** Time spent in the function itself, in ms, over the whole profile. */
   self_ms: number;
@@ -98,6 +106,29 @@ export function parseSignature(sig: string): { file: string; line: number; funct
   return { file: parts[0]!, line: Number(parts[1]) || 0, function: parts.slice(2).join('::') };
 }
 
+/**
+ * The line of the `func` declaration of `fn`, searching upwards from `bodyLine` (the
+ * first body line Godot's profiler reports, 1-based) in the script `source`.
+ *
+ * Searching upwards (instead of jumping exactly one line back) also covers declarations
+ * spread over several lines (`func f(` / `a,` / `b):`) and blank or comment lines between
+ * the declaration and the first statement. For inner classes Godot names the function
+ * "Inner.method"; only the last part appears after `func`. Returns undefined when no
+ * matching declaration is found (lambdas, edited files, ...), so the caller keeps
+ * Godot's line.
+ */
+export function declarationLine(source: string, bodyLine: number, fn: string): number | undefined {
+  const name = fn.split('.').pop() ?? fn;
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return undefined; // e.g. "<anonymous lambda>"
+  const lines = source.split(/\r?\n/);
+  const decl = new RegExp(`^\\s*(static\\s+)?func\\s+${name}\\s*\\(`);
+  // Look at most 50 lines up: a function's first statement is never that far away.
+  for (let i = Math.min(bodyLine, lines.length) - 1; i >= 0 && i >= bodyLine - 51; i--) {
+    if (decl.test(lines[i]!)) return i + 1;
+  }
+  return undefined;
+}
+
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     const t = setTimeout(done, ms);
@@ -114,7 +145,14 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
  * Profile script functions for `durationMs` and return the `top` functions by
  * self time. The profiler is always turned off again, also on cancellation.
  */
-export async function profileScripts(channel: RuntimeChannel, durationMs: number, top: number, signal?: AbortSignal): Promise<ScriptProfile> {
+export async function profileScripts(
+  channel: RuntimeChannel,
+  durationMs: number,
+  top: number,
+  signal?: AbortSignal,
+  /** Reads a res:// script's text (undefined when unreadable); enables declaration lines. */
+  readSource?: (resPath: string) => Promise<string | undefined>,
+): Promise<ScriptProfile> {
   const signatures = new Map<number, string>();
   let frames = 0;
   let scriptSeconds = 0;
@@ -155,7 +193,7 @@ export async function profileScripts(channel: RuntimeChannel, durationMs: number
     );
   }
 
-  const functions = total.functions
+  const ranked: ScriptFunctionStat[] = total.functions
     .map((f) => {
       const where = parseSignature(signatures.get(f.sig) ?? `?${f.sig}`);
       return { ...where, calls: f.calls, self_ms: round(f.self * 1000), total_ms: round(f.total * 1000) };
@@ -165,6 +203,19 @@ export async function profileScripts(channel: RuntimeChannel, durationMs: number
     .filter((f) => f.calls > 0 && !f.file.startsWith(ADDON_PREFIX))
     .sort((a, b) => b.self_ms - a.self_ms || b.total_ms - a.total_ms)
     .slice(0, top);
+  // Report the `func` line (what the rest of the tools use), see the header. Each script
+  // is read once, however many of its functions are listed.
+  const sources = new Map<string, Promise<string | undefined>>();
+  const functions: ScriptFunctionStat[] = [];
+  for (const f of ranked) {
+    let decl: number | undefined;
+    if (readSource && f.file) {
+      if (!sources.has(f.file)) sources.set(f.file, readSource(f.file).catch(() => undefined));
+      const source = await sources.get(f.file);
+      decl = source !== undefined ? declarationLine(source, f.line, f.function) : undefined;
+    }
+    functions.push(decl !== undefined && decl !== f.line ? { ...f, line: decl, body_line: f.line } : f);
+  }
   return {
     seconds: round(elapsed / 1000),
     frames,

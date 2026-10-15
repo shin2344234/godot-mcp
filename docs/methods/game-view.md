@@ -69,7 +69,10 @@ display: on Linux `DISPLAY`/`WAYLAND_DISPLAY`, e.g. Xvfb). `godot_game_perf` sti
   importer, so a file the game just wrote works and Godot logs no "loaded resource as image
   file" warning. If its size differs from the returned image, it is resized to it with the same
   Lanczos filter (so a full-size reference and a scaled capture of the same frame compare as
-  identical; verified). The comparison runs on the returned (scaled) image.
+  identical; verified). The comparison runs on the **full-resolution** capture (cropped to
+  `region`), not on the scaled preview, so `max_size` changes only what is returned, never the
+  diff's precision. Captures over 1920×1080 pixels are reduced to that pixel count for the
+  diff (`compared_size` shows the size actually compared).
 - A pixel is "changed" when any RGBA channel differs by more than `tolerance` (0..255,
   default 16; JPEG references need a higher value). Result:
 
@@ -83,7 +86,7 @@ display: on Linux `DISPLAY`/`WAYLAND_DISPLAY`, e.g. Xvfb). `godot_game_perf` sti
 `changed_rect` is the bounding box of changed pixels in **source viewport pixels** (scale and
 region offset undone, rounded outwards), so it can be passed back as `region` to look closer;
 `null` when nothing changed. Cost: a GDScript loop over the RGBA bytes, about 120 ms for
-768×432 on the test machine; it grows with `max_size`.
+768×432 on the test machine, so roughly 0.3 s for a 1280×720 capture and 0.6 s for 1080p.
 
 ### Editor viewports (`source: "editor_2d" | "editor_3d"`)
 
@@ -100,16 +103,23 @@ Bridge method `editor.screenshot` (E), params
   editor backend (it does not await them), so the method can't wait for frames: when the
   viewport's container isn't visible it calls `EditorInterface.set_main_screen_editor("2D" | "3D")`
   and answers `{ "retry_after_ms": 300, "switched_main_screen": "3D" }`; the server waits and
-  asks once more with `_retried: true`, and the tool result carries `switched_main_screen`.
+  asks again, up to 6 times (about 1.8 s; a slow software renderer can need more than one
+  frame after the switch), sending `_retried: true` on the last attempt so the addon then
+  fails with `CONFLICT` instead of switching again. The tool result carries
+  `switched_main_screen`.
 - A headless editor (`--headless`) renders nothing: `UNSUPPORTED` with a hint to use a windowed
   editor or a windowed game. Without a connected editor: `EDITOR_NOT_CONNECTED`.
 - `node` is rejected with editor sources.
 
 ## godot_game_perf
 
-Tool params: `{ run_id?, sample_seconds?: 0.1..30, profile_scripts_seconds?: 0.5..30, top?: 15 }`
+Tool params: `{ run_id?, sample_seconds?: 0.1..30, profile_scripts_seconds?: 0.5..30, top?: 15, monitors?: bool }`
 
-### Snapshot (always)
+### Snapshot
+
+Included by default only when neither `sample_seconds` nor `profile_scripts_seconds` is given
+(a sampling/profiling call returns just `"fps"` in its place, so repeated measurements don't
+repeat ~40 monitor values); `monitors: true` asks for both, `false` leaves it out.
 
 Runtime method `game.perf`, reading `Performance.get_monitor()` for the 4.7.2 monitor list
 (`doc/classes/Performance.xml`, `MONITOR_MAX` = 59) in readable units:
@@ -131,8 +141,10 @@ Runtime method `game.perf`, reading `Performance.get_monitor()` for the 4.7.2 mo
 ```
 
 `TIME_FPS` is updated once a second by Godot; `TIME_PROCESS` / `TIME_PHYSICS_PROCESS` are the
-last frame's step times. Physics and navigation groups are left out when all their values are
-zero. Custom monitors (`Performance.add_custom_monitor`) appear under `custom` (non-numbers as
+last frame's step times. Physics and navigation groups are left out while all their values
+are zero and have never been non-zero in this game; once a group has shown up it stays in every
+later snapshot (physics counts such as active objects and collision pairs drop to 0 whenever
+everything sleeps, and a group that came and went between calls looked like a bug). Custom monitors (`Performance.add_custom_monitor`) appear under `custom` (non-numbers as
 `null`). Static memory monitors are 0 in release builds.
 
 ### Sampling (`sample_seconds`)
@@ -175,12 +187,15 @@ times in seconds). Result:
 ```json
 "scripts": { "seconds": 1.0, "frames": 89, "script_ms_per_frame": 0.235,
   "functions": [
-    { "function": "heavy_work", "file": "res://view_test.gd", "line": 10, "calls": 89, "self_ms": 13.47, "total_ms": 13.47 },
-    { "function": "_process", "file": "res://view_test.gd", "line": 4, "calls": 89, "self_ms": 3.76, "total_ms": 17.62 } ] }
+    { "function": "heavy_work", "file": "res://view_test.gd", "line": 9, "body_line": 10, "calls": 89, "self_ms": 13.47, "total_ms": 13.47 },
+    { "function": "_process", "file": "res://view_test.gd", "line": 3, "body_line": 4, "calls": 89, "self_ms": 3.76, "total_ms": 17.62 } ] }
 ```
 
 Sorted by self time, `top` entries (1..50). GDScript signatures are `path::line::name`, where
-`line` is the **first line of the function's body** (verified: a `func` on line 9 reports 10).
+Godot's `line` is the **first line of the function's body** (verified: a `func` on line 9
+reports 10). The server reads the script (inside the project, `.gd` only) and reports the
+`func` declaration line instead, like `godot_code_symbols` does, with Godot's body line as
+`body_line`; when the declaration can't be found (lambdas, a changed file) Godot's line stays.
 Functions with no calls during the window and the addon's own scripts (`res://addons/godot_mcp/`,
 i.e. the runtime answering requests) are left out; `script_ms_per_frame` comes from Godot's
 per-frame totals and still includes them. Snapshot, sampling and profiling run concurrently, so

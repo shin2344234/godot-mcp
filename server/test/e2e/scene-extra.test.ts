@@ -250,4 +250,22 @@ describe.skipIf(!enabled)('scene extras: editor', () => {
 
     expect(errorText(await call('godot_scene_close', { path: 'res://player.tscn' }))).toMatch(/NOT_FOUND: .*not open/);
   }, 120_000);
+
+  it('scene.save_as retargets the tab in godot_status; scene.close then reports discarded changes', async () => {
+    json(await call('godot_scene_open', { path: 'res://main.tscn' }));
+    json(await call('godot_scene_save_as', { path: 'res://levels/main_alt.tscn' }));
+    // Godot's own open-scenes list keeps the old path after EditorInterface.save_scene_as;
+    // the plugin reports the tab's real path (core/editor_scenes.gd).
+    let status = json(await call('godot_status', {}));
+    expect(status.editor.edited_scene).toBe('res://levels/main_alt.tscn');
+    expect(status.editor.open_scenes).toContain('res://levels/main_alt.tscn');
+    expect(status.editor.open_scenes).not.toContain('res://main.tscn');
+
+    json(await call('godot_node_add', { type: 'Node', name: 'DirtyAlt' }));
+    status = json(await call('godot_status', {}));
+    expect(status.editor.unsaved_scenes).toContain('res://levels/main_alt.tscn');
+    const closed = json(await call('godot_scene_close', { discard: true }));
+    expect(closed).toMatchObject({ closed: 'res://levels/main_alt.tscn', discarded_changes: true });
+    expect(read(proj.dir, 'levels/main_alt.tscn')).not.toContain('DirtyAlt');
+  }, 120_000);
 });

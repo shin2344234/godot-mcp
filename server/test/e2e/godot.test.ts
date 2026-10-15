@@ -84,6 +84,19 @@ describe.skipIf(!enabled)('headless backend', () => {
     expect(rot.warnings).toBeUndefined();
     const got = json(await client.callTool({ name: 'godot_node_get', arguments: { scene: 'res://main.tscn', path: 'Nested', properties: ['position'] } }));
     expect(got.properties.position).toBe('Vector2(7, 0)');
+    // Without a filter only non-default values are listed (plus how many were left out),
+    // and the embedded material shows only what differs from a fresh CanvasItemMaterial.
+    const all = json(await client.callTool({ name: 'godot_node_get', arguments: { scene: 'res://main.tscn', path: 'Nested' } }));
+    expect(all.properties.position).toBe('Vector2(7, 0)');
+    expect(all.properties).not.toHaveProperty('visible'); // true is the default
+    expect(all.defaults_omitted).toBeGreaterThan(10);
+    expect(all.properties.material).toMatchObject({ class: 'CanvasItemMaterial', embedded: true, properties: { blend_mode: 1 } });
+    expect(Object.keys(all.properties.material.properties)).toEqual(['blend_mode']);
+    expect(all.properties.material.defaults_omitted).toBeGreaterThan(0);
+    // ["*"] still lists everything, defaults included.
+    const star = json(await client.callTool({ name: 'godot_node_get', arguments: { scene: 'res://main.tscn', path: 'Nested', properties: ['*'] } }));
+    expect(star.properties.visible).toBe(true);
+    expect(star.defaults_omitted).toBeUndefined();
     // CanvasItemMaterial.BLEND_MODE_ADD == 1, saved inside the scene's sub-resource.
     expect(readFileSync(path.join(proj.dir, 'main.tscn'), 'utf8')).toMatch(/blend_mode = 1/);
     const bad = await client.callTool({ name: 'godot_node_set', arguments: { scene: 'res://main.tscn', path: 'Nested', properties: { 'texture:width': 3 } } });

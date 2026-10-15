@@ -16,6 +16,19 @@ extends RefCounted
 ##   pixels; Viewport._make_input_local applies get_final_transform().affine_inverse(), so
 ##   we convert viewport coordinates with root.get_final_transform() before sending.
 ##
+## Mouse position: Viewport.get_mouse_position() of the main window does NOT come from the
+## events. For a viewport attached to the screen on a DisplayServer with FEATURE_MOUSE (any
+## windowed game), Godot 4.7.2 computes it from DisplayServer.mouse_get_position(), i.e. the
+## real OS pointer (scene/main/viewport.cpp, Viewport::get_mouse_position). Injected events
+## alone therefore left get_mouse_position() at wherever the OS pointer was (the window
+## center under Xvfb), and a game that aims with it always shot the center. So before every
+## injected mouse event we also warp the OS pointer to the event's position
+## (Input.warp_mouse, window pixels; see _warp_pointer). Headless runs have no FEATURE_MOUSE,
+## and there the viewport uses the last event position, which already worked. Side effect of
+## the warp in a window: the OS reports the pointer move back, so the game may see one extra
+## InputEventMouseMotion at the same position (with an OS-computed `relative`), and a game
+## recording (record.start) captures it too.
+##
 ## Timing: events are only sent right after `await tree.process_frame`. That signal fires at
 ## the start of SceneTree.process(), before nodes' _process(), so Input.is_action_just_pressed()
 ## is true in that frame's _process() (and in the next physics tick), exactly like a real key
@@ -33,6 +46,11 @@ const RECORDING_VERSION: int = 1
 ## Upper bound for one `wait` step / frame counts, so a typo can't hang the runtime.
 const MAX_WAIT_MS: float = 120000.0
 const MAX_FRAMES: int = 10000
+
+## Warning for input sent while the game is suspended (see input_run).
+const PAUSED_INPUT_DROPPED: String = ("The game is paused (godot_game_time pause), so Godot discarded these input events: " +
+	"input is disabled while paused and events are not queued, so stepping frames will not apply them. " +
+	"Resume first (godot_game_time action \"resume\"), then send the input again.")
 
 const STEP_TYPES: Array[String] = ["key", "action", "move", "click", "drag", "scroll", "text", "joy_button", "joy_axis", "touch", "wait"]
 
@@ -64,6 +82,9 @@ static var _rec: Dictionary = {}
 static var _sized: bool = false
 ## Last mouse position we injected, in window pixels (for InputEventMouseMotion.relative).
 static var _mouse: Vector2 = Vector2.ZERO
+## Distance (viewport px) above which a move/click reports that get_mouse_position() still
+## disagrees with the injected position after the warp (e.g. the OS refused the warp).
+const POINTER_MISMATCH_PX: float = 1.5
 
 
 static func methods() -> Dictionary:
@@ -103,8 +124,13 @@ static func input_run(rt: Node, params: Dictionary) -> Dictionary:
 	var note: String = await _ensure_window_size(rt)
 	if note != "":
 		warnings.append(note)
-	if not rt.can_process():
-		warnings.append("The game is paused (godot_game_time pause): nodes don't process input while paused. Resume it, or step frames to let the input take effect.")
+	# While the whole game is suspended (godot_game_time pause), Godot's SceneDebugger
+	# disables the root viewport's input and no node can process, so every event below is
+	# DROPPED, not queued: stepping frames afterwards does not deliver it. (The old warning
+	# suggested stepping, which misled the agent into thinking the input would apply.)
+	var suspended: bool = not rt.can_process()
+	if suspended:
+		warnings.append(PAUSED_INPUT_DROPPED)
 	elif tree.paused:
 		warnings.append("SceneTree.paused is true: only nodes with process_mode Always/When Paused receive input.")
 
@@ -128,6 +154,9 @@ static func input_run(rt: Node, params: Dictionary) -> Dictionary:
 		"frames": Engine.get_process_frames() - start_frame,
 		"viewport": _vec(tree.root.get_visible_rect().size),
 	}
+	if suspended:
+		# Machine-readable twin of the warning: nothing reached the game.
+		result["discarded"] = true
 	if not warnings.is_empty():
 		result["warnings"] = warnings
 	return R.ok(result)
@@ -275,6 +304,7 @@ static func _run_step(rt: Node, st: Dictionary) -> Dictionary:
 			res["at"] = _vec(p["value"])
 			_add_target(res, p)
 			res["hovered"] = _path_or_null(rt, root.gui_get_hovered_control())
+			_check_pointer(root, p["value"], res)
 
 		"click":
 			var p: Dictionary = _resolve_pos(rt, st["at"])
@@ -304,6 +334,7 @@ static func _run_step(rt: Node, st: Dictionary) -> Dictionary:
 					await tree.process_frame
 			res["hit"] = _path_or_null(rt, hit)
 			res["handled"] = handled
+			_check_pointer(root, pos, res)
 			if p.has("node") and hit != null:
 				var target: Node = p["node"]
 				res["hit_target"] = hit == target or target.is_ancestor_of(hit)
@@ -459,8 +490,46 @@ static func _send(ev: InputEvent) -> void:
 		m.ctrl_pressed = m.ctrl_pressed or Input.is_key_pressed(KEY_CTRL)
 		m.alt_pressed = m.alt_pressed or Input.is_key_pressed(KEY_ALT)
 		m.meta_pressed = m.meta_pressed or Input.is_key_pressed(KEY_META)
+	# Move the real pointer first, so get_mouse_position() already matches while the game
+	# handles the event (see "Mouse position" in the header comment).
+	if ev is InputEventMouse:
+		_warp_pointer((ev as InputEventMouse).position)
 	Input.parse_input_event(ev)
 	Input.flush_buffered_events()
+
+
+## Warps the OS pointer to `window_pos` (window pixels, what mouse events carry), so that
+## Viewport.get_mouse_position() reports the injected position in a windowed game.
+## Skipped where it isn't needed or can't work:
+##   - headless (no FEATURE_MOUSE): the viewport already uses the last event's position;
+##   - MOUSE_MODE_CAPTURED: the pointer is locked to the window center and games read
+##     `relative` instead (DisplayServer only records the position then, no harm either way);
+##   - no change since the last warp/real position, to avoid needless OS round trips.
+## Input.warp_mouse() is relative to the focused game window (DisplayServerX11 warps in
+## the last focused or the main window; on Windows it is skipped when no game window has
+## focus), so it is best effort: _check_pointer reports when it didn't take effect.
+static func _warp_pointer(window_pos: Vector2) -> void:
+	if DisplayServer.get_name() == "headless" or not DisplayServer.has_feature(DisplayServer.FEATURE_MOUSE):
+		return
+	if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+		return
+	var w := Vector2i(window_pos.round())
+	if Vector2i(DisplayServer.mouse_get_position() - DisplayServer.window_get_position()) == w:
+		return
+	Input.warp_mouse(Vector2(w))
+
+
+## After a move/click: if the game's get_mouse_position() still isn't where we pointed
+## (warp refused by the OS, captured mouse, a window manager moving things), say so in the
+## step result instead of letting the agent assume the aim worked.
+static func _check_pointer(root: Window, pos: Vector2, res: Dictionary) -> void:
+	if DisplayServer.get_name() == "headless" or Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+		return
+	var actual: Vector2 = root.get_mouse_position()
+	if actual.distance_to(pos) > POINTER_MISMATCH_PX:
+		res["mouse_position"] = _vec(actual)
+		res["warning"] = ("get_viewport().get_mouse_position() reads %s, not %s: the OS pointer could not be moved there " +
+			"(is the game window focused and on screen?). Event positions (event.position) are still correct.") % [_vec(actual), _vec(pos)]
 
 
 ## Waits `ms` real milliseconds (unaffected by time scale or pause), then syncs to the start
@@ -955,8 +1024,9 @@ static func record_replay(rt: Node, params: Dictionary) -> Dictionary:
 	var rec_window: Variant = (rec as Dictionary).get("window")
 	if rec_window is Array and Vector2(float(rec_window[0]), float(rec_window[1])) != Vector2(root.size):
 		warnings.append("Recorded in a %sx%s window, replaying in %dx%d: positions are not rescaled." % [rec_window[0], rec_window[1], root.size.x, root.size.y])
-	if not rt.can_process():
-		warnings.append("The game is paused (godot_game_time pause): nodes don't process input while paused.")
+	var suspended: bool = not rt.can_process()
+	if suspended:
+		warnings.append(PAUSED_INPUT_DROPPED)
 
 	await tree.process_frame
 	var start_ms: int = Time.get_ticks_msec()
@@ -974,12 +1044,17 @@ static func record_replay(rt: Node, params: Dictionary) -> Dictionary:
 		if ev == null:
 			skipped += 1
 			continue
+		# Same as live input: keep get_mouse_position() in step with replayed mouse events.
+		if ev is InputEventMouse:
+			_warp_pointer((ev as InputEventMouse).position)
 		Input.parse_input_event(ev)
 		Input.flush_buffered_events()
 		sent += 1
 		if ev is InputEventMouse:
 			_mouse = (ev as InputEventMouse).position
 	var out: Dictionary = {"replayed": sent, "elapsed_ms": Time.get_ticks_msec() - start_ms, "frames": Engine.get_process_frames() - start_frame}
+	if suspended:
+		out["discarded"] = true
 	if skipped > 0:
 		out["skipped"] = skipped
 	if not warnings.is_empty():

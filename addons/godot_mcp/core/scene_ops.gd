@@ -86,8 +86,18 @@ static func _dump_node(root: Node, node: Node, level: int, max_depth: int, inclu
 				state["truncated"] = true
 				break
 			out_children.append(_dump_node(root, child, level + 1, max_depth, include_props, state))
+	# Token budget: a tree of a few hundred nodes is read often, so leave out what carries no
+	# information: no script / not an instance (null), no groups, not truncated. "children"
+	# stays even when empty: it is the tree's structure and clients walk it without checks.
+	# (node.get keeps the full node summary; only the tree is trimmed.)
+	for key: String in ["script", "instance"]:
+		if info.get(key) == null:
+			info.erase(key)
+	if (info.get("groups", []) as Array).is_empty():
+		info.erase("groups")
 	info["children"] = out_children
-	info["truncated"] = truncated
+	if truncated:
+		info["truncated"] = true
 	return info
 
 
@@ -173,6 +183,18 @@ static func non_default_properties(root: Node, node: Node) -> Dictionary:
 	return out
 
 
+## True when `v` is the default of property `pname`: the engine class default, or, when
+## the class has none, the attached script's default (exported/script variables). Same
+## comparison non_default_properties uses (same type and value).
+static func _is_default(node: Node, script: Script, pname: String, v: Variant) -> bool:
+	var default: Variant = ClassDB.class_get_property_default_value(node.get_class(), pname)
+	if default == null and script != null:
+		default = script.get_property_default_value(pname)
+	if default == null:
+		return v == null
+	return typeof(v) == typeof(default) and v == default
+
+
 ## node.get: properties, script, and persistent signal connections of one node.
 static func node_info(root: Node, params: Variant) -> Dictionary:
 	var p := Params.new(params, "node.get")
@@ -187,13 +209,21 @@ static func node_info(root: Node, params: Variant) -> Dictionary:
 	var node: Node = res["value"]
 	var info: Dictionary = _node_summary(root, node)
 	var props: Dictionary = {}
-	if has_filter:
+	# ["*"] = every property, defaults included (the old default output); the same opt-in
+	# godot_game_get uses for live nodes.
+	var everything: bool = has_filter and wanted.size() == 1 and str(wanted[0]) == "*"
+	if has_filter and not everything:
 		for w: Variant in wanted:
 			var pname: String = str(w)
 			if Codec.find_property(node, pname).is_empty():
 				return Codec.unknown_property_error(node, pname, "Node '%s' (%s)" % [info["path"], info["type"]])
 			props[pname] = Codec.encode(node.get(pname), root)
 	else:
+		# Without a filter only values that differ from the class (or script) default are
+		# listed, plus a count of the ones left out: a node has 50-150 inspector properties,
+		# almost all at their defaults, and listing them cost a lot of tokens for nothing.
+		var script: Script = node.get_script() as Script
+		var omitted: int = 0
 		for pinfo: Dictionary in node.get_property_list():
 			var usage: int = pinfo["usage"]
 			if (usage & (PROPERTY_USAGE_STORAGE | PROPERTY_USAGE_EDITOR)) == 0 or (usage & _GROUPING_USAGE) != 0:
@@ -201,7 +231,13 @@ static func node_info(root: Node, params: Variant) -> Dictionary:
 			var pname2: String = pinfo["name"]
 			if pname2.begins_with("_"):
 				continue
-			props[pname2] = Codec.encode(node.get(pname2), root)
+			var v: Variant = node.get(pname2)
+			if not everything and _is_default(node, script, pname2, v):
+				omitted += 1
+				continue
+			props[pname2] = Codec.encode(v, root)
+		if omitted > 0:
+			info["defaults_omitted"] = omitted
 	info["properties"] = props
 	info["signals_connected"] = _signal_connections(root, node)
 	var child_names: Array[String] = []

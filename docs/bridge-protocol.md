@@ -222,13 +222,17 @@ result:
 ```json
 {
   "scene": "res://main.tscn",
-  "root": { "name": "Main", "type": "Node2D", "path": ".", "script": "res://main.gd" | null,
-            "instance": "res://player.tscn" | null, "groups": [],
-            "children": [ ... ], "child_count": 3, "truncated": false },
+  "root": { "name": "Main", "type": "Node2D", "path": ".", "script": "res://main.gd",
+            "instance": "res://player.tscn", "groups": ["level"],
+            "children": [ ... ], "child_count": 3, "truncated": true },
   "node_count": 12,
   "truncated": false
 }
 ```
+
+To keep big trees cheap, a node entry leaves out `script` and `instance` when they would be
+null, `groups` when empty, and `truncated` unless it is true; `children` (possibly empty) and
+`child_count` are always present.
 
 `depth` limits recursion (children beyond depth are omitted but `child_count` is kept).
 `max_nodes` caps total nodes; set `truncated: true` when hit. Nodes that belong to an
@@ -239,9 +243,12 @@ expanded (unless `editable_children` is on for that instance).
 
 params: `{ "scene"?, "path": "Player", "properties"?: ["position","scale"] }`
 
-If `properties` is omitted, return all properties whose usage includes
-`PROPERTY_USAGE_STORAGE` or `PROPERTY_USAGE_EDITOR`, skipping groups/categories,
-excluding huge values (encode with caps). Result:
+If `properties` is omitted, return the properties whose usage includes
+`PROPERTY_USAGE_STORAGE` or `PROPERTY_USAGE_EDITOR` (skipping groups/categories, encoded
+with caps) **whose value differs from the class or script default**, and
+`"defaults_omitted": <count>` for the rest. `"properties": ["*"]` returns all of them,
+defaults included. Embedded sub-resources (e.g. a material) list only their non-default
+properties too, with their own `defaults_omitted` (also in node.set read-backs). Result:
 
 ```json
 { "path": "Player", "type": "CharacterBody2D", "script": "res://player.gd",

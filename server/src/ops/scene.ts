@@ -118,11 +118,11 @@ export const nodeGet = defineOp({
   name: 'node.get',
   group: 'node',
   title: 'Get node',
-  description: 'Godot node: read a node\'s type, script, property values and connected signals. Pass properties to read only some.',
+  description: 'Godot node: read a node\'s type, script, non-default property values and connected signals. Pass properties to read only some.',
   input: z.object({
     scene,
     path: nodePath(),
-    properties: z.array(z.string()).optional().describe('Only these properties, e.g. ["position", "visible"].'),
+    properties: z.array(z.string()).optional().describe('Only these, e.g. ["position", "visible"]; ["*"] = all incl. defaults (default: non-default values only).'),
   }),
   readOnly: true,
   idempotent: true,

@@ -231,9 +231,12 @@ describe.skipIf(!enabled || !hasXvfb)('game view: windowed process run', () => {
     const saved = json(await call('godot_game_screenshot', { save_to: 'user://mcp_shots/ref.png', max_size: 256 }));
     expect(saved.saved_to).toBe('user://mcp_shots/ref.png');
     const same = json(await call('godot_game_screenshot', { compare_to: 'user://mcp_shots/ref.png' }));
-    expect(same.diff).toMatchObject({ changed_pixels: 0, changed_rect: null, compared_size: [768, 432] });
-    // The reference was saved at full size; the 768 px screenshot is compared at 768 px.
-    expect(same.diff.reference_size).toEqual([1152, 648]);
+    // The diff runs on the full-resolution capture, whatever max_size the preview has
+    // (768 px by default here): the full-size reference needs no scaling.
+    expect(same.diff).toMatchObject({ changed_pixels: 0, changed_rect: null, compared_size: [1152, 648] });
+    expect(same.diff.reference_size).toBeUndefined();
+    const tiny = json(await call('godot_game_screenshot', { compare_to: 'user://mcp_shots/ref.png', max_size: 64 }));
+    expect(tiny).toMatchObject({ width: 64, diff: { changed_pixels: 0, compared_size: [1152, 648] } });
 
     // Show the yellow marker (600,300 100x100) and compare again.
     writeFileSync(path.join(proj.dir, 'show_marker.txt'), 'x');
@@ -266,7 +269,11 @@ describe.skipIf(!enabled || !hasXvfb)('game view: windowed process run', () => {
     expect(r.scripts.frames).toBeGreaterThan(5);
     expect(r.scripts.functions.length).toBeLessThanOrEqual(5);
     const heavy = r.scripts.functions.find((f: { function: string }) => f.function === 'heavy_work');
-    expect(heavy, JSON.stringify(r.scripts)).toMatchObject({ file: 'res://view_test.gd', line: 10 }); // first body line
+    // Godot reports the first body line (10); the server moves it to the `func` line (9).
+    expect(heavy, JSON.stringify(r.scripts)).toMatchObject({ file: 'res://view_test.gd', line: 9, body_line: 10 });
+    // A sampling/profiling call leaves the full monitor snapshot out (just fps).
+    expect(r.monitors).toBeUndefined();
+    expect(typeof r.fps).toBe('number');
     expect(JSON.stringify(r.scripts)).not.toContain('addons/godot_mcp');
     expect(heavy.calls).toBeGreaterThan(5);
     expect(heavy.self_ms).toBeGreaterThan(0);
@@ -341,6 +348,16 @@ describe.skipIf(!enabled || !hasXvfb)('game view: windowed editor', () => {
     expect(r.switched_main_screen).toBe('3D');
     expect(r.source.viewport).toBe('editor 3D viewport');
     expect(Math.max(r.width, r.height)).toBeLessThanOrEqual(256);
+  }, 90_000);
+
+  it('captures the 3D viewport right after another main screen was opened (no CONFLICT)', async () => {
+    // The shooting-gallery log: open_script, then editor_3d failed once with "still not
+    // visible after switching" (one 300 ms wait wasn't enough); now the server polls.
+    json(await call('godot_editor_ui', { action: 'open_script', script: 'res://view_test.gd' }));
+    const result = await call('godot_game_screenshot', { source: 'editor_3d', max_size: 128 });
+    const r = json(result);
+    expect(r.switched_main_screen).toBe('3D');
+    expect(r.source.viewport).toBe('editor 3D viewport');
   }, 90_000);
 
   it('captures a game started from the editor (through the debugger relay)', async () => {
