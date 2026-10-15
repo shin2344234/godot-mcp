@@ -52,6 +52,16 @@ var _no_client_sec: float = 0.0
 
 func _enter_tree() -> void:
 	_parse_user_args()
+	# One bridge per project. Command-line editor runs (`godot --import`, `--export-release`
+	# ...) load enabled plugins too, and Godot hides those flags from scripts
+	# (OS.get_cmdline_args() returns just ["--editor"] there, verified on 4.7.2). Without
+	# this check such a run would overwrite the open editor's session.json and delete it on
+	# exit, cutting the MCP server off from the editor the user is working in.
+	if not _lsp_only:
+		var other_pid: int = _other_editor_serving()
+		if other_pid > 0:
+			print("Godot MCP: another Godot editor (pid %d) is already serving this project's MCP bridge; not starting a second one here." % other_pid)
+			return
 	_register_settings()
 
 	_logs = LogBuffer.new(2000)
@@ -65,6 +75,7 @@ func _enter_tree() -> void:
 		push_error("Godot MCP: could not listen on 127.0.0.1 ports %d-%d (%s). Change the '%s' project setting to a free port and re-enable the plugin." %
 			[base_port, base_port + Constants.PORT_FALLBACK_COUNT, error_string(err), Constants.PORT_SETTING])
 		set_process(false)
+		_server = null  # never wrote a session file, so _exit_tree must not remove one
 		return
 	var write_err: int = SessionFile.write(_server.port, _server.token, _session_file(), {"lsp_port": _lsp_port(), "lsp_only": _lsp_only})
 	if write_err != OK:
@@ -79,7 +90,8 @@ func _exit_tree() -> void:
 	if _server != null:
 		_server.stop()
 		_server = null
-	SessionFile.remove(_session_file())
+		# remove() also checks the file's pid, so a file another editor wrote survives.
+		SessionFile.remove(_session_file())
 	if _logs != null:
 		OS.remove_logger(_logs)
 		_logs = null
@@ -101,6 +113,39 @@ func _process(delta: float) -> void:
 				print("Godot MCP: no MCP server connected for %d s; closing this LSP-only editor." % int(_no_client_sec))
 				_lsp_only = false # quit once
 				get_tree().quit()
+
+
+## If session.json belongs to another live editor whose bridge accepts connections, returns
+## that editor's pid; otherwise 0. A stale file (editor crashed or was killed) has nobody
+## listening on its port, so this editor takes over as usual. The probe is a plain TCP
+## connect to 127.0.0.1 with a short timeout; it doesn't authenticate, so it never shows
+## up as a client in the other editor beyond an immediately closed socket.
+func _other_editor_serving() -> int:
+	var path_abs: String = ProjectSettings.globalize_path(Constants.SESSION_FILE)
+	if not FileAccess.file_exists(path_abs):
+		return 0
+	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(path_abs))
+	if not parsed is Dictionary:
+		return 0
+	var pid: int = int((parsed as Dictionary).get("pid", -1))
+	var port: int = int((parsed as Dictionary).get("port", -1))
+	if pid <= 0 or pid == OS.get_process_id() or port <= 0:
+		return 0
+	var tcp := StreamPeerTCP.new()
+	if tcp.connect_to_host("127.0.0.1", port) != OK:
+		return 0
+	var deadline: int = Time.get_ticks_msec() + 500
+	while Time.get_ticks_msec() < deadline:
+		tcp.poll()
+		match tcp.get_status():
+			StreamPeerTCP.STATUS_CONNECTED:
+				tcp.disconnect_from_host()
+				return pid
+			StreamPeerTCP.STATUS_ERROR, StreamPeerTCP.STATUS_NONE:
+				return 0
+		OS.delay_msec(10)
+	tcp.disconnect_from_host()
+	return 0
 
 
 ## [code/docs area] Reads the LSP-only flags from the user arguments (after `--`).

@@ -155,6 +155,18 @@ describe.skipIf(!enabled)('editor backend', () => {
     expect(readFileSync(path.join(proj.dir, 'main.tscn'), 'utf8')).toContain('McpLabel');
   }, 120_000);
 
+  it('keeps the editor connection when a command-line import runs on the same project', async () => {
+    // `godot --import` / `--export-*` start a throwaway editor that loads our plugin; it must
+    // not overwrite or delete the real editor's session file.
+    const sessionFile = path.join(proj.dir, '.godot', 'godot_mcp', 'session.json');
+    const before = readFileSync(sessionFile, 'utf8');
+    importProject(proj.dir);
+    expect(existsSync(sessionFile)).toBe(true);
+    expect(readFileSync(sessionFile, 'utf8')).toBe(before);
+    const status = json(await client.callTool({ name: 'godot_status', arguments: {} }));
+    expect(status.editor_connected).toBe(true);
+  }, 240_000);
+
   it('reads editor logs', async () => {
     const logs = json(await client.callTool({ name: 'godot_editor_logs', arguments: {} }));
     expect(Array.isArray(logs.entries)).toBe(true);

@@ -45,10 +45,13 @@ function assertWritable(p: ProjectPath): void {
 }
 
 /** Ask the live editor to pick up files we changed on disk (best effort). */
-async function refreshEditor(ctx: OpContext, paths: string[]): Promise<boolean> {
+async function refreshEditor(ctx: OpContext, paths: string[], fullScan = false): Promise<boolean> {
   if (!ctx.bridge.isOpen()) return false;
   try {
-    await ctx.bridge.request('filesystem.refresh', { paths });
+    // Updating single files doesn't register files inside a folder the editor has never
+    // seen (e.g. a new class_name script in a new folder stays "not declared"); a full
+    // scan does. Scans are asynchronous and cheap enough when only done for new folders.
+    await ctx.bridge.request('filesystem.refresh', fullScan ? {} : { paths });
     return true;
   } catch {
     return false;
@@ -236,9 +239,10 @@ export const filesWrite = defineOp({
     assertWritable(file);
     const existed = existsSync(file.abs);
     if (existed && !overwrite) throw new OpError('CONFLICT', `"${file.res}" already exists. Pass overwrite: true to replace it, or use godot_files_edit.`);
+    const newFolder = !existsSync(path.dirname(file.abs));
     await mkdir(path.dirname(file.abs), { recursive: true });
     await writeFile(file.abs, content, 'utf8');
-    const refreshed = await refreshEditor(ctx, [file.res]);
+    const refreshed = await refreshEditor(ctx, [file.res], newFolder);
     const validation = await maybeValidate(ctx, file);
     return { data: { path: file.res, created: !existed, bytes: Buffer.byteLength(content), editor_refreshed: refreshed, validation } };
   },
@@ -296,11 +300,12 @@ export const filesMove = defineOp({
     assertWritable(dst);
     if (!existsSync(src.abs)) throw new OpError('NOT_FOUND', `"${src.res}" does not exist.`);
     if (existsSync(dst.abs)) throw new OpError('CONFLICT', `"${dst.res}" already exists.`);
+    const newFolder = !existsSync(path.dirname(dst.abs));
     await mkdir(path.dirname(dst.abs), { recursive: true });
     const moved = sidecars(src);
     await rename(src.abs, dst.abs);
     for (const side of moved) await rename(side, dst.abs + side.slice(src.abs.length));
-    const refreshed = await refreshEditor(ctx, [src.res, dst.res]);
+    const refreshed = await refreshEditor(ctx, [src.res, dst.res], newFolder);
     return { data: { from: src.res, to: dst.res, sidecars_moved: moved.length, editor_refreshed: refreshed } };
   },
 });
