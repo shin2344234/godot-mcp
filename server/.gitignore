@@ -1,4 +1,11 @@
 node_modules/
 dist/
 *.log
+# Build products of scripts/copy-addon.mjs (run by `npm pack` / `npm publish`):
+# the bundled addon, and copies of the repository-root README.md and LICENSE, which npm
+# only picks up from the package root. Edit the repository-root files, not these.
 addon/
+/README.md
+/LICENSE
+# `npm pack` output
+*.tgz

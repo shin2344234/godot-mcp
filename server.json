@@ -1,0 +1,128 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.shin2344234/godot-mcp",
+  "title": "Godot MCP",
+  "description": "Edit Godot 4 scenes, nodes and scripts; run, test and debug games live in the editor or headless.",
+  "version": "0.1.0",
+  "websiteUrl": "https://github.com/shin2344234/godot-mcp#readme",
+  "repository": {
+    "url": "https://github.com/shin2344234/godot-mcp",
+    "source": "github",
+    "id": "1419961425",
+    "subfolder": "server"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@shin2344234/godot-mcp",
+      "version": "0.1.0",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "GODOT_PROJECT_PATH",
+          "description": "Folder of the Godot project (the one containing project.godot). Defaults to the folder the client starts the server in, so set it whenever that is not your project (e.g. in desktop apps).",
+          "format": "filepath",
+          "isRequired": false,
+          "placeholder": "/path/to/my_game"
+        },
+        {
+          "name": "GODOT_PATH",
+          "description": "Full path of the Godot 4.x executable (GODOT_BIN is accepted too). If unset, the server looks for godot, godot4 or Godot_v4* on PATH. On Windows use the main Godot exe, not the _console.exe launcher.",
+          "format": "filepath",
+          "isRequired": false,
+          "placeholder": "/usr/local/bin/godot"
+        },
+        {
+          "name": "GODOT_MCP_MODE",
+          "description": "How tools are exposed: 'full' lists every enabled operation as its own tool (best for clients with tool search); 'compact' lists only core tools plus router tools that reach the rest.",
+          "format": "string",
+          "isRequired": false,
+          "choices": ["full", "compact"],
+          "default": "full"
+        },
+        {
+          "name": "GODOT_MCP_TOOLSETS",
+          "description": "Comma-separated tool groups to enable, or 'all' (default). Groups: core, files, scene, node, script, run, editor, signal, resource, visual, anim, world, audio, project, import, export, code, docs, game, debug, test. 'core' is always on.",
+          "format": "string",
+          "isRequired": false,
+          "placeholder": "core,files,scene,node,script,run"
+        },
+        {
+          "name": "GODOT_MCP_READ_ONLY",
+          "description": "Set to true to hide every tool that changes something (inspection only).",
+          "format": "boolean",
+          "isRequired": false,
+          "default": "false"
+        },
+        {
+          "name": "GODOT_MCP_ALLOW_EVAL",
+          "description": "Set to true to let godot_game_eval run GDScript inside the running game. Off by default: evaluated code can do anything the game can (files, OS calls).",
+          "format": "boolean",
+          "isRequired": false,
+          "default": "false"
+        },
+        {
+          "name": "GODOT_MCP_CONFIRM",
+          "description": "'elicit' asks the user (through the client's elicitation dialog, when supported) before irreversible operations; 'never' skips asking, for unattended runs where nobody can answer.",
+          "format": "string",
+          "isRequired": false,
+          "choices": ["elicit", "never"],
+          "default": "elicit"
+        },
+        {
+          "name": "GODOT_MCP_LOG_LEVEL",
+          "description": "Verbosity of the server's stderr log (use 'debug' when filing a bug report).",
+          "format": "string",
+          "isRequired": false,
+          "choices": ["debug", "info", "warn", "error"],
+          "default": "info"
+        },
+        {
+          "name": "GODOT_MCP_HEADLESS_TIMEOUT_MS",
+          "description": "Advanced: timeout for one headless Godot invocation, in milliseconds.",
+          "format": "number",
+          "isRequired": false,
+          "default": "120000"
+        },
+        {
+          "name": "GODOT_MCP_BRIDGE_TIMEOUT_MS",
+          "description": "Advanced: timeout for one request to the live editor bridge, in milliseconds.",
+          "format": "number",
+          "isRequired": false,
+          "default": "30000"
+        },
+        {
+          "name": "GODOT_MCP_LSP_PORT",
+          "description": "Advanced: port of the Godot editor's GDScript language server on 127.0.0.1. Defaults to the port the editor plugin reports, else 6005.",
+          "format": "number",
+          "isRequired": false,
+          "placeholder": "6005"
+        },
+        {
+          "name": "GODOT_MCP_LSP_TIMEOUT_MS",
+          "description": "Advanced: timeout for one GDScript language server request, in milliseconds.",
+          "format": "number",
+          "isRequired": false,
+          "default": "15000"
+        },
+        {
+          "name": "GODOT_MCP_LSP_IDLE_MS",
+          "description": "Advanced: stop the private headless language server after this many milliseconds without code tool calls.",
+          "format": "number",
+          "isRequired": false,
+          "default": "600000"
+        },
+        {
+          "name": "GODOT_MCP_CACHE_DIR",
+          "description": "Advanced: folder for the server's cache (the Godot class docs index). Defaults to the per-user cache folder of the OS.",
+          "format": "filepath",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}
