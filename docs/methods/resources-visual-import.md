@@ -70,6 +70,11 @@ params: `{ "path", "properties": { "albedo_color": "#ff0000", "next_pass:albedo_
   like `"albedo_color:a"`); on a Theme, `"<Type>/<data type>/<item>"` (creates the item if
   needed). A null intermediate (`next_pass` unset) → `BAD_PARAMS` suggesting
   `{"next_pass": {"new": "StandardMaterial3D"}}` first.
+* Dynamic `_set` keys that a class lists only once they exist are accepted too, e.g.
+  MeshLibrary `"item/<id>/name"`, `"item/<id>/mesh"`, `"item/<id>/mesh_transform"` (creates
+  the item; undo removes it) or TileSet `"physics_layer_<n>/collision_layer"`. A key counts
+  as valid if a throwaway duplicate lists it after `set(key, null)`; its PropertyInfo types
+  the value (so `{"new": "BoxMesh"}` works for `item/0/mesh`). Same for `resource.create`.
 * All values are validated before anything changes. Imported assets (`.import` next to
   them) and scenes are refused with a pointer to `import.set` / `node.set`.
 * Editor: edits the cached instance (open scenes update immediately) as one

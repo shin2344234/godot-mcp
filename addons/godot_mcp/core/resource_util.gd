@@ -200,6 +200,10 @@ static func plan_property(res: Resource, key: String, value: Variant, label: Str
 	var segments: PackedStringArray = key.split(":")
 	var first: String = segments[0]
 	if Codec.find_property(res, first).is_empty():
+		if segments.size() == 1:
+			var dynamic: Dictionary = _plan_dynamic_property(res, key, value)
+			if not dynamic.is_empty():
+				return dynamic
 		return unknown_property(res, first, label)
 	if segments.size() == 1:
 		var r: Dictionary = Codec.decode_property(res, key, value, null)
@@ -228,6 +232,43 @@ static func plan_property(res: Resource, key: String, value: Variant, label: Str
 		return decoded
 	var old: Variant = res.get_indexed(NodePath(key))
 	return {"key": key, "value": decoded["value"], "old": old, "undo": ["set_indexed", [key, old]]}
+
+
+## Properties that only appear in get_property_list() once they are set. Several engine
+## classes implement indexed properties in _set()/_get()/_get_property_list() and list only
+## the entries that already exist, e.g. (Godot 4.7.2):
+##   MeshLibrary "item/<id>/name|mesh|mesh_transform|shapes|preview|navigation_mesh|..."
+##     (scene/resources/3d/mesh_library.cpp: MeshLibrary::_set creates the item on the
+##     first "item/<id>/..." assignment, _get_property_list lists existing items only);
+##   TileSet "physics_layer_<n>/...", "custom_data_layer_<n>/..." (layers are added on set).
+## A .tres stores exactly these keys, so accepting them lets resource.create/set build a
+## MeshLibrary (GridMap) from scratch. To tell a real dynamic key from a typo without
+## touching `res`, the key is set to null on a throwaway duplicate; if the duplicate then
+## lists the key, it is valid and its PropertyInfo types the value. (A plain "set, then
+## get" check is not enough: MeshLibrary::_set creates item <id> even for an unknown
+## "item/<id>/typo" key before returning false.) Returns {} when the key is not dynamic.
+static func _plan_dynamic_property(res: Resource, key: String, value: Variant) -> Dictionary:
+	if not key.contains("/") or key.begins_with("metadata/"):
+		return {}
+	var probe: Resource = res.duplicate(false)
+	if probe == null:
+		return {}
+	probe.set(key, null)
+	var info: Dictionary = Codec.find_property(probe, key)
+	if info.is_empty():
+		return {}
+	var decoded: Dictionary = Codec.decode_typed(value, info, null, probe)
+	if R.is_err(decoded):
+		return decoded
+	var existed: bool = not Codec.find_property(res, key).is_empty()
+	var old: Variant = res.get(key) if existed else null
+	var undo: Array = ["set_indexed", [key, old]]
+	# Undoing the first assignment of a new MeshLibrary item removes the item again.
+	if res is MeshLibrary and key.begins_with("item/"):
+		var id: int = key.get_slice("/", 1).to_int()
+		if not (res as MeshLibrary).get_item_list().has(id):
+			undo = ["remove_item", [id]]
+	return {"key": key, "value": decoded["value"], "old": old, "undo": undo, "dynamic": true}
 
 
 static func _plan_theme_item(theme: Theme, key: String, value: Variant) -> Dictionary:

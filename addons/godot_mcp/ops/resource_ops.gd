@@ -223,8 +223,13 @@ static func set_properties(params: Variant, env: Dictionary) -> Dictionary:
 		for plan: Dictionary in plans:
 			cs.do_method(res, &"set_indexed", [NodePath(str(plan["key"])), plan["value"]])
 		cs.do_method(ResourceSaver, &"save", [res, path])
+		var undo_seen: Dictionary = {}
 		for plan: Dictionary in plans:
 			var undo: Array = plan["undo"]
+			# Several keys of one new MeshLibrary item share the undo "remove_item <id>".
+			if undo_seen.has(str(undo)):
+				continue
+			undo_seen[str(undo)] = true
 			var undo_args: Array = (undo[1] as Array).duplicate()
 			if str(undo[0]) == "set_indexed":
 				undo_args[0] = NodePath(str(undo_args[0]))
