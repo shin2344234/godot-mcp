@@ -7,23 +7,14 @@ the sources linked in [Sources](#sources) on 2026-10-15. The store is still mark
 
 ## Read first: minimum Godot version
 
-**As the code stands, the addon only loads on Godot 4.7 or later.** On 4.5.1 and 4.6.3 the
-plugin fails to compile:
-
-```
-SCRIPT ERROR: Parse Error: Static function "get_unsaved_scenes()" not found in base "GDScriptNativeClass".
-          at: GDScript::reload (res://addons/godot_mcp/editor/editor_backend.gd:167)
-```
-
-`EditorInterface.get_unsaved_scenes()` was added in 4.7, and `editor_backend.gd` calls it
-directly. Other files already call it through `call(&"get_unsaved_scenes")`. The store
-rejects assets that don't work in the Godot version given on the listing, so:
-
-- **Either** enter **4.7** as the minimum Godot version (the listing text below assumes this),
-- **or** first change that one line so it's only called when it exists, the way
-  `ops/editor_ui_ops.gd` does. With that change, all 46 addon scripts compiled and the
-  bridge started on 4.5.1 and 4.6.3 (the plugin loaded; the tools were not tested on those
-  versions). Then the minimum can be 4.5, which matches the top-level README.
+**List 4.7 as the minimum Godot version.** The addon used to fail to compile on 4.5 and 4.6
+because `editor_backend.gd` called `EditorInterface.get_unsaved_scenes()` (new in 4.7)
+directly. That call is now looked up at runtime, and the plugin loads and starts the bridge
+on 4.5.1, 4.6.3 and 4.7.2. But the end-to-end suite on 4.5.1 had 32 of 216 tests failing:
+several tools use other 4.7-only engine APIs (for example `ScriptEditor.reload_open_files`,
+some language server methods and debugger behaviour). The store rejects assets that don't
+work on the Godot version given on the listing, so 4.7 is the honest minimum until those
+are handled.
 
 ## What the store is (verified)
 
@@ -117,7 +108,7 @@ Paste these into the store forms.
 | Link to source code | <https://github.com/shin2344234/godot-mcp> |
 | Tags | `AI`, `MCP`, `LLM`, `Claude`, `Editor`, `Automation` |
 | Version name | `0.1.0` |
-| Minimum Godot version | **4.7** (4.5 only after the fix above) |
+| Minimum Godot version | **4.7** |
 | Maximum Godot version | leave empty |
 
 Tag rules: a tag can't be the asset's name, and don't add both the singular and the plural of
@@ -160,7 +151,6 @@ a tag.
 >
 > Requires Godot 4.7 or later. Documentation and source code: https://github.com/shin2344234/godot-mcp
 
-(If the minimum becomes 4.5, change the last line to "Godot 4.5 or later (4.7 recommended)".)
 
 ### AI usage disclosure (suggested)
 
@@ -225,13 +215,14 @@ versions differ), rebuild the zip, and add a new version on the **Versions** tab
 
 ## Decisions for Seth
 
-- **Minimum Godot version:** 4.7 as-is, or fix the one line and list 4.5.
+- **Minimum Godot version:** 4.7 (see "Read first"). Supporting 4.5/4.6 would be its own
+  piece of work.
 - **Asset name:** "Godot MCP" is generic, and similar names exist (for example "Funplay MCP
   for Godot" and "Godot AI" on the store, "Godot MCP Pro" and "Godot-MCP" on the legacy
   Asset Library). A more distinctive name may avoid confusion.
 - **Publisher name:** `shin2344234` (matches `plugin.cfg` and the npm scope) or a real name.
-- **Legacy Asset Library:** only needed for Godot 4.6 and older, and only works if the
-  minimum version becomes 4.5. It installs a GitHub archive of a commit; to make that archive
+- **Legacy Asset Library:** only useful for Godot 4.6 and older, which the tools don't
+  fully support yet, so skip it for now. It installs a GitHub archive of a commit; to make that archive
   contain only `addons/`, enable the commented `export-ignore` block in `.gitattributes`
   (this also strips the server from GitHub's source downloads).
 - **AI disclosure wording.**

@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadConfig } from '../../src/config.js';
-import { addonInstall, status } from '../../src/ops/core.js';
+import { addonInstall, godotVersionHint, status } from '../../src/ops/core.js';
 import type { OpContext } from '../../src/ops/types.js';
 
 const dirs: string[] = [];
@@ -73,5 +73,14 @@ describe('empty environment values', () => {
     const c = loadConfig([], { GODOT_PATH: '', GODOT_BIN: '/opt/godot', GODOT_PROJECT_PATH: '  ' });
     expect(c.godotPath).toBe('/opt/godot');
     expect(c.projectPath).toBe(path.resolve(process.cwd()));
+  });
+});
+
+describe('godot version hint', () => {
+  it('warns below 4.7 only', () => {
+    expect(godotVersionHint('4.5.1.stable.official.f62fdbde1').godot_hint).toMatch(/older than 4\.7/);
+    expect(godotVersionHint('4.7.2.stable.official.ed1daf0bf')).toEqual({});
+    expect(godotVersionHint('5.0.stable')).toEqual({});
+    expect(godotVersionHint(undefined)).toEqual({});
   });
 });

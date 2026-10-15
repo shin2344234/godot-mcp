@@ -26,7 +26,7 @@ If something doesn't work, see [troubleshooting.md](troubleshooting.md).
 You need:
 
 - **Node.js 22 or newer** (for `npx`). Check with `node --version`. Claude Desktop users who install the `.mcpb` bundle don't need it.
-- **Godot 4.5 or newer.** 4.7 is what we test with.
+- **Godot 4.7 or newer** (tested with 4.7.2). The addon loads on 4.5 and 4.6, but several tools use 4.7-only engine APIs and fail there.
 - **A Godot project folder** (the one with `project.godot`).
 
 The server finds Godot on your `PATH` (as `godot`, `godot4`, `Godot` or a `Godot_v4*` download). If it isn't there, give the full path with `GODOT_PATH`. Typical locations:

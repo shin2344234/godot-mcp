@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 The first public release, planned as **0.1.0**. It covers the MCP server
 (`@shin2344234/godot-mcp` on npm) and the Godot editor addon (`addons/godot_mcp`).
-Targets Godot 4.7 (tested with 4.7.2) and needs Godot 4.5 or newer.
+Needs Godot 4.7 or newer (tested with 4.7.2).
 
 ### Added
 

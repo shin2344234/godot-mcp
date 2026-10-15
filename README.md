@@ -13,11 +13,11 @@ An [MCP](https://modelcontextprotocol.io) server for the **Godot 4** engine. Use
 It works through a live editor bridge, and through headless Godot when the editor is closed.
 
 > **Status:** preparing the first release, 0.1.0 (step 4 of 4: release prep). Not on npm yet.
-> Targets **Godot 4.7** (tested with 4.7.2) and needs **Godot 4.5 or newer**. Speaks the **2026-07-28 MCP spec** and also serves older 2025-era clients.
+> Needs **Godot 4.7 or newer** (tested with 4.7.2). Speaks the **2026-07-28 MCP spec** and also serves older 2025-era clients.
 
 ## Quick start
 
-You need Node.js 22+ and Godot 4.5+ (4.7 recommended). In your Godot project folder, run:
+You need Node.js 22+ and Godot 4.7+. In your Godot project folder, run:
 
 ```bash
 npx -y @shin2344234/godot-mcp init

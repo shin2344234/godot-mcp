@@ -57,10 +57,24 @@ export const status = defineOp({
         // Missing or outdated addon: point at the tool that fixes it (clients like
         // Claude Desktop install the server as a bundle, with no `init` step).
         ...addonHint(ctx.config.projectPath),
+        ...godotVersionHint(godot?.version),
       },
     };
   },
 });
+
+/**
+ * `godot_hint` when the Godot found is older than 4.7. The addon loads on 4.5/4.6, but
+ * several tools rely on 4.7-only engine APIs (the e2e suite on 4.5.1 had 32 failures),
+ * so say so up front instead of letting individual tools fail in confusing ways.
+ */
+export function godotVersionHint(version: string | undefined): { godot_hint?: string } {
+  const m = /^(\d+)\.(\d+)/.exec(version ?? '');
+  if (!m) return {};
+  const [major, minor] = [Number(m[1]), Number(m[2])];
+  if (major > 4 || (major === 4 && minor >= 7)) return {};
+  return { godot_hint: `Godot ${version} is older than 4.7, the minimum this server supports. Some tools will fail; use Godot 4.7 or newer (set GODOT_PATH).` };
+}
 
 /** plugin.cfg's version="..." (undefined when the file or the key is missing). */
 function addonVersion(dir: string): string | undefined {
