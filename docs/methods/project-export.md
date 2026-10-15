@@ -77,6 +77,8 @@ params: `{ "op": "add" | "remove" | "move", "name", "path"?, "singleton"?: true,
 * Name rules = `EditorAutoloadSettings::_autoload_name_is_valid` (identifier, not an
   engine class, global script class, built-in type, engine singleton or keyword).
 * `path`: an existing .gd/.cs/.tscn/.scn; a .gd with compile errors is added with a warning.
+  A .gd whose native base is not a Node (resolved through `extends` chains, class_name
+  bases included) is refused: Godot fails to instantiate such an autoload at startup.
 * Stored like 4.7's Autoload tab: `"*uid://..."` (`*` = singleton) via
   `ResourceUID.path_to_uid` (falls back to the res:// path when the file has no UID).
 * Editor: `add` with defaults uses `EditorPlugin.add_autoload_singleton` and `remove` uses

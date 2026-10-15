@@ -9,7 +9,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { copySampleProject, errorText, GODOT_BIN, json, killAndWait, startServer } from './helpers.js';
@@ -142,6 +142,27 @@ describe.skipIf(!enabled)('project tools (headless)', () => {
     expect(errorText(await call('godot_autoload_edit', { op: 'add', name: 'GameState', path: 'res://enemy.gd' }))).toContain('already exists');
     expect(errorText(await call('godot_autoload_edit', { op: 'remove', name: 'GameStat' }))).toContain('Did you mean: GameState');
   }, 120_000);
+
+  it('autoload.edit refuses scripts that do not extend Node', async () => {
+    // MCP_TEST_LOG: a MeshLibrary script was accepted and would break at startup.
+    mkdirSync(path.join(proj.dir, 'data'), { recursive: true });
+    writeFileSync(path.join(proj.dir, 'data', 'lib_base.gd'), 'class_name LibBase\nextends MeshLibrary\n');
+    writeFileSync(path.join(proj.dir, 'data', 'lib.gd'), 'extends LibBase\n');
+    writeFileSync(path.join(proj.dir, 'data', 'broken_res.gd'), 'extends "res://data/lib_base.gd"\nfunc oops(:\n');
+    writeFileSync(path.join(proj.dir, 'data', 'plain.gd'), 'var x := 1\n');
+    const viaClass = errorText(await call('godot_autoload_edit', { op: 'add', name: 'Lib', path: 'res://data/lib.gd' }));
+    expect(viaClass).toMatch(/extends MeshLibrary, which is not a Node/);
+    expect(errorText(await call('godot_autoload_edit', { op: 'add', name: 'Broken', path: 'res://data/broken_res.gd' }))).toMatch(/extends MeshLibrary/);
+    expect(errorText(await call('godot_autoload_edit', { op: 'add', name: 'Plain', path: 'res://data/plain.gd' }))).toMatch(/extends RefCounted/);
+    // A Node script through a class_name base is fine.
+    writeFileSync(path.join(proj.dir, 'data', 'node_base.gd'), 'class_name NodeBase extends Node2D\n');
+    writeFileSync(path.join(proj.dir, 'data', 'node_child.gd'), 'extends NodeBase\n');
+    const ok = json(await call('godot_autoload_edit', { op: 'add', name: 'Child', path: 'res://data/node_child.gd' }));
+    expect(ok.autoloads.map((a: { name: string }) => a.name)).toContain('Child');
+    json(await call('godot_autoload_edit', { op: 'remove', name: 'Child' }));
+    // Leave the project clean for project.validate below.
+    rmSync(path.join(proj.dir, 'data'), { recursive: true, force: true });
+  }, 180_000);
 
   it('project.plugins lists, enables and disables plugins', async () => {
     mkdirSync(path.join(proj.dir, 'addons', 'demo'), { recursive: true });
