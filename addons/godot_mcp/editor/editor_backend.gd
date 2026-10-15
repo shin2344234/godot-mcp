@@ -116,6 +116,8 @@ func _dispatch_module(method: String, descriptor: Dictionary, params: Dictionary
 ##   logs         the LogBuffer
 ##   edited_root  Callable(params) -> {"value": root} | error: the edited scene, opening
 ##                params.scene first when given (same rules as scene methods)
+##   scene_mutations  method name -> planner Callable(root, params) for every scene
+##                mutation (step 1 and modules); used by batch.apply (core/scene_batch.gd)
 func _env() -> Dictionary:
 	return {
 		"editor": true,
@@ -125,7 +127,21 @@ func _env() -> Dictionary:
 		"plugin": _plugin,
 		"logs": _logs,
 		"edited_root": _edited_root,
+		"scene_mutations": scene_mutation_planners(),
 	}
+
+
+## Every scene-mutation planner: the step 1 ones plus module methods of kind
+## "scene_mutation". Shared with HeadlessBackend through _env() so batch.apply can run any
+## of them.
+static func scene_mutation_planners() -> Dictionary:
+	var out: Dictionary = Methods.scene_mutations()
+	var modules: Dictionary = Methods.module_methods()
+	for method: String in modules:
+		var d: Dictionary = modules[method]
+		if str(d.get("kind", "")) == "scene_mutation":
+			out[method] = d["fn"]
+	return out
 
 
 ## Payload for editor.status (also merged into the bridge's `welcome` frame).
