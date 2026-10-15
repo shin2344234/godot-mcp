@@ -44,11 +44,16 @@ const LSP_ONLY_ARG: String = "--godot-mcp-lsp-only"
 ## the port in this user argument for the session file.
 const LSP_PORT_ARG: String = "--godot-mcp-lsp-port="
 const DEFAULT_LSP_PORT: int = 6005
+## The MCP server's own one-shot `godot --headless --import` runs pass this user argument:
+## such a run must not open a bridge, or for its few seconds it would look like a user's
+## editor to the server (session.json), which then routes edits and LSP requests to it.
+const NO_BRIDGE_ARG: String = "--godot-mcp-no-bridge"
 ## LSP-only watchdog: quit after this long without any bridge client...
 const ORPHAN_TIMEOUT_SEC: float = 15.0
 ## ...or this long after startup if the server never connected at all.
 const FIRST_CLIENT_TIMEOUT_SEC: float = 120.0
 var _lsp_only: bool = false
+var _no_bridge: bool = false
 var _lsp_port_arg: int = 0
 var _had_client: bool = false
 var _no_client_sec: float = 0.0
@@ -56,6 +61,8 @@ var _no_client_sec: float = 0.0
 
 func _enter_tree() -> void:
 	_parse_user_args()
+	if _no_bridge:
+		return
 	# One bridge per project. Command-line editor runs (`godot --import`, `--export-release`
 	# ...) load enabled plugins too, and Godot hides those flags from scripts
 	# (OS.get_cmdline_args() returns just ["--editor"] there, verified on 4.7.2). Without
@@ -184,6 +191,8 @@ func _parse_user_args() -> void:
 	for arg: String in OS.get_cmdline_user_args():
 		if arg == LSP_ONLY_ARG:
 			_lsp_only = true
+		elif arg == NO_BRIDGE_ARG:
+			_no_bridge = true
 		elif arg.begins_with(LSP_PORT_ARG) and arg.trim_prefix(LSP_PORT_ARG).is_valid_int():
 			_lsp_port_arg = arg.trim_prefix(LSP_PORT_ARG).to_int()
 

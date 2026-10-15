@@ -54,6 +54,16 @@ export function runProcess(file: string, args: string[], opts: { cwd?: string; t
   });
 }
 
+/**
+ * Arguments for a one-shot `godot --headless --import` on the project. `--import` starts
+ * an editor that loads enabled plugins; the user argument tells the godot_mcp plugin not
+ * to open a bridge there (addons/godot_mcp/plugin.gd NO_BRIDGE_ARG), so the run never
+ * passes for the user's editor in session.json while it lasts.
+ */
+export function importArgs(projectPath: string): string[] {
+  return ['--headless', '--path', projectPath, '--import', '--', '--godot-mcp-no-bridge'];
+}
+
 /** Last N lines of Godot output, for including in error messages. */
 function tail(text: string, lines = 15): string {
   return text.trim().split(/\r?\n/).slice(-lines).join('\n');
@@ -61,6 +71,11 @@ function tail(text: string, lines = 15): string {
 
 export class HeadlessRunner {
   private readonly classCache: ClassCacheWatcher;
+  /**
+   * Set by index.ts: asks a running private LSP editor to register changed class_name
+   * scripts; resolves true if it did (then no `--import` may run next to it).
+   */
+  editorRefresh?: () => Promise<boolean>;
 
   constructor(
     private readonly projectPath: string,
@@ -92,7 +107,7 @@ export class HeadlessRunner {
     // misbehave. Import once first (the same thing opening the editor does).
     if (!existsSync(path.join(this.projectPath, '.godot'))) {
       log.info('Project has no .godot/ cache yet; running a one-time import');
-      await runProcess(godot.path, ['--headless', '--path', this.projectPath, '--import'], { cwd: this.projectPath, timeoutMs: Math.max(this.timeoutMs, 300_000) });
+      await runProcess(godot.path, importArgs(this.projectPath), { cwd: this.projectPath, timeoutMs: Math.max(this.timeoutMs, 300_000) });
     } else {
       // Same problem for a class_name script written since the cache was last saved
       // (e.g. by files.write): `--script` runs only read the cache, so the new class
@@ -101,8 +116,17 @@ export class HeadlessRunner {
       // Godot 4.7.2). See src/project/classCache.ts.
       const stale = await this.classCache.needsRefresh();
       if (stale.length) {
-        log.info(`Global class cache is missing ${stale.map((s) => s.name).join(', ')}; refreshing it with --import`);
-        await runProcess(godot.path, ['--headless', '--path', this.projectPath, '--import'], { cwd: this.projectPath, timeoutMs: Math.max(this.timeoutMs, 300_000) });
+        const names = stale.map((s) => s.name).join(', ');
+        if (this.editorRefresh && (await this.editorRefresh())) {
+          // A private editor runs on this project: it registers the classes and saves the
+          // cache itself (at the end of its scan, so give it a moment). Never --import
+          // next to it; see LspManager.refreshScriptClasses.
+          log.info(`Global class cache is missing ${names}; the private editor is refreshing it`);
+          for (let i = 0; i < 30 && (await this.classCache.staleClasses()).length; i++) await new Promise((r) => setTimeout(r, 100));
+        } else {
+          log.info(`Global class cache is missing ${names}; refreshing it with --import`);
+          await runProcess(godot.path, importArgs(this.projectPath), { cwd: this.projectPath, timeoutMs: Math.max(this.timeoutMs, 300_000) });
+        }
       }
     }
 

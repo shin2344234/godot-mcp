@@ -385,6 +385,23 @@ export class LspManager {
   }
 
   /**
+   * For the headless runner (src/godot/headless.ts): when a private editor is running, make
+   * it pick up changed scripts, which registers new class_name scripts and saves the global
+   * class cache, instead of a concurrent `godot --import`. Two editors must not share the
+   * .godot caches: `--import` rewrites filesystem_cache10, the private editor's next scan
+   * then takes the new script for unchanged and never registers its class (verified with
+   * Godot 4.7.2: code.diagnostics kept reporting it "not declared"). Returns true when the
+   * private editor took care of it.
+   */
+  async refreshScriptClasses(): Promise<boolean> {
+    const s = this.session;
+    if (!s || s.source !== 'private' || s.client.closed || !this.privatePid) return false;
+    this.lastSync = 0; // not throttled: the caller needs the classes now
+    await this.syncChangedFiles();
+    return this.session === s && !s.client.closed && Boolean(this.privateBridge?.isOpen());
+  }
+
+  /**
    * Private editor only: find scripts changed on disk since it last looked (by other
    * tools or the user) and make it pick them up.
    */

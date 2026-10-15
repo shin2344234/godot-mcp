@@ -18,6 +18,7 @@ import { loadConfig } from './config.js';
 import { HeadlessRunner } from './godot/headless.js';
 import { RunManager } from './godot/runs.js';
 import { log } from './log.js';
+import { lspManagerFor } from './lsp/manager.js';
 import { buildServer } from './mcp/server.js';
 import { SERVER_VERSION } from './version.js';
 import { runInit } from './init/init.js';
@@ -99,6 +100,9 @@ function main(): void {
     headless: new HeadlessRunner(config.projectPath, config.godotPath, config.headlessTimeoutMs),
     runs: new RunManager(),
   };
+  // A private LSP editor on this project refreshes the global class cache itself; the
+  // headless runner must not run `godot --import` next to it (see HeadlessRunner).
+  services.headless.editorRefresh = () => lspManagerFor(config).refreshScriptClasses();
 
   const handle = serveStdio(() => buildServer(config, services), {
     legacy: 'serve',

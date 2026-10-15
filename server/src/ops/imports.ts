@@ -18,7 +18,7 @@
 import { z } from 'zod';
 import { OpError } from '../errors.js';
 import { findGodot, GODOT_NOT_FOUND_HINT } from '../godot/binary.js';
-import { runProcess } from '../godot/headless.js';
+import { importArgs, runProcess } from '../godot/headless.js';
 import { forwardOp } from './backend.js';
 import { defineOp, type OpContext, type Operation } from './types.js';
 
@@ -108,7 +108,7 @@ async function reimportHeadless(ctx: OpContext, kind: 'first' | 'reimport' = 're
   if (!godot) throw new OpError('GODOT_NOT_FOUND', GODOT_NOT_FOUND_HINT);
   ctx.progress?.(0, 1, 'Importing with godot --headless --import');
   const timeoutMs = Math.max(ctx.config.headlessTimeoutMs, 300_000);
-  const run = await runProcess(godot.path, ['--headless', '--path', ctx.config.projectPath, '--import'], { cwd: ctx.config.projectPath, timeoutMs });
+  const run = await runProcess(godot.path, importArgs(ctx.config.projectPath), { cwd: ctx.config.projectPath, timeoutMs });
   ctx.progress?.(1, 1, 'Import finished');
   const what = kind === 'first' ? 'The asset had no .import file yet, and' : 'The .import file was updated, but';
   if (run.timedOut) {
