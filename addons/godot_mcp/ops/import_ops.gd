@@ -149,8 +149,12 @@ static func _load_import(raw: String, label: String) -> Dictionary:
 		return R.err(R.NOT_FOUND, "%s: '%s' does not exist. Use files.list to find the asset." % [label, path])
 	if not FileAccess.file_exists(path + ".import"):
 		var ext: String = path.get_extension().to_lower()
-		var hint: String = "This file type is not imported (scenes, .tres, scripts and shaders are loaded directly; use resource.read)." if ext in ["tscn", "tres", "gd", "gdshader", "res", "scn", "cs", "json", "cfg"] else "It has not been imported yet: open the project in the Godot editor (or run `godot --headless --import`) so Godot creates the .import file."
-		return R.err(R.NOT_FOUND, "%s: '%s' has no .import file. %s" % [label, path, hint])
+		if ext in ["tscn", "tres", "gd", "gdshader", "res", "scn", "cs", "json", "cfg"]:
+			return R.err(R.NOT_FOUND, "%s: '%s' has no .import file. This file type is not imported (scenes, .tres, scripts and shaders are loaded directly; use resource.read)." % [label, path])
+		# A new asset nobody has imported yet. `needs_import` tells the TypeScript server
+		# (server/src/ops/imports.ts) to import it - `godot --headless --import` headless,
+		# an editor filesystem scan when the editor is connected - and then call us again.
+		return R.err(R.NOT_FOUND, "%s: '%s' has no .import file: Godot has not imported it yet (or has no importer for .%s files)." % [label, path, ext], {"needs_import": true, "path": path})
 	var cf := ConfigFile.new()
 	var err: int = cf.load(path + ".import")
 	if err != OK:

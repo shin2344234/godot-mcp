@@ -228,7 +228,10 @@ params: `{ "path": "res://icon.svg" }` → result:
 Parsed from `<path>.import` with ConfigFile. `imported` = every dest file exists and the
 import did not fail (`null` for the `keep`/`skip` importers). A file without `.import` →
 `NOT_FOUND` explaining whether the type is never imported (use `resource.read`) or the
-project was not imported yet.
+asset was not imported yet; the latter carries `data.needs_import: true`, and the
+**server** then imports it and retries (both `import.get` and `import.set`): headless with
+`godot --headless --path <project> --import`, in the editor with a full filesystem scan
+(`filesystem.refresh`), polling up to 30 s until the `.import` file exists.
 
 ## import.set (E/H)
 
