@@ -6,3 +6,5 @@ dist/
 examples/**/.godot/
 # .mcpb build output and its staging folder (scripts/build-mcpb.mjs)
 dist-bundles/
+# Godot Asset Store upload built by scripts/build-addon-zip.mjs
+dist-addon/
