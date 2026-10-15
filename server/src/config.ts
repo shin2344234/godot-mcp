@@ -32,6 +32,13 @@ export interface Config {
   headlessTimeoutMs: number;
   /** Timeout for a single editor-bridge request, in ms. */
   bridgeTimeoutMs: number;
+  /**
+   * "elicit" (default): ask the user through the client's elicitation dialog
+   * before irreversible operations, when the client supports it.
+   * "never": don't ask (for unattended runs where nobody can answer, e.g.
+   * `claude -p`, which auto-declines elicitation).
+   */
+  confirm: 'elicit' | 'never';
 }
 
 /** Parse `--flag value` / `--flag=value` style args into a map. */
@@ -94,5 +101,6 @@ export function loadConfig(argv: string[] = process.argv.slice(2), env: NodeJS.P
     readOnly: truthy(args.get('read-only') ?? env.GODOT_MCP_READ_ONLY),
     headlessTimeoutMs: Number(env.GODOT_MCP_HEADLESS_TIMEOUT_MS ?? 120_000),
     bridgeTimeoutMs: Number(env.GODOT_MCP_BRIDGE_TIMEOUT_MS ?? 30_000),
+    confirm: (args.get('confirm') ?? env.GODOT_MCP_CONFIRM ?? 'elicit').toLowerCase() === 'never' ? 'never' : 'elicit',
   };
 }

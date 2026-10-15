@@ -54,7 +54,19 @@ export async function killAndWait(pid: number, timeoutMs = 10_000): Promise<void
 
 export type Era = 'legacy' | 'modern';
 
-export async function startServer(opts: { project: string; era?: Era; env?: Record<string, string>; args?: string[] }) {
+export interface StartOptions {
+  project: string;
+  era?: Era;
+  env?: Record<string, string>;
+  args?: string[];
+  /**
+   * Make the test client declare form elicitation and answer every
+   * elicitation/create with this function (e.g. accept or decline).
+   */
+  onElicit?: (message: string) => { action: 'accept' | 'decline' | 'cancel'; content?: Record<string, unknown> };
+}
+
+export async function startServer(opts: StartOptions) {
   const transport = new StdioClientTransport({
     command: TSX,
     args: [path.join(SERVER_ROOT, 'src', 'index.ts'), '--project', opts.project, ...(opts.args ?? [])],
@@ -63,8 +75,15 @@ export async function startServer(opts: { project: string; era?: Era; env?: Reco
   });
   const client = new Client(
     { name: 'godot-mcp-tests', version: '0.0.0' },
-    opts.era === 'modern' ? { versionNegotiation: { mode: { pin: '2026-07-28' } } } : {},
+    {
+      ...(opts.era === 'modern' ? { versionNegotiation: { mode: { pin: '2026-07-28' as const } } } : {}),
+      ...(opts.onElicit ? { capabilities: { elicitation: { form: {} } } } : {}),
+    },
   );
+  if (opts.onElicit) {
+    const answer = opts.onElicit;
+    client.setRequestHandler('elicitation/create', async (req) => answer(String((req.params as { message?: string }).message ?? '')) as never);
+  }
   await client.connect(transport);
   return client;
 }

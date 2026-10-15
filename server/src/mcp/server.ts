@@ -17,7 +17,7 @@
  * would have to be marked destructive and prompt for every read).
  */
 
-import { McpServer } from '@modelcontextprotocol/server';
+import { McpServer, type ServerContext } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Config } from '../config.js';
 import { OpError, toOpError } from '../errors.js';
@@ -25,7 +25,10 @@ import { log } from '../log.js';
 import { enabledOperations } from '../ops/catalog.js';
 import { toolName, type OpContext, type OpResult, type Operation } from '../ops/types.js';
 import { SERVER_VERSION } from '../version.js';
+import { confirmStep } from './confirm.js';
 import { buildInstructions } from './instructions.js';
+import { registerPrompts } from './prompts.js';
+import { registerResources } from './resources.js';
 
 type ToolResult = {
   content: ({ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string })[];
@@ -49,8 +52,49 @@ function toErrorResult(err: unknown): ToolResult {
   return { content: [{ type: 'text', text }], isError: true };
 }
 
-async function execute(op: Operation, args: unknown, ctx: OpContext): Promise<ToolResult> {
+/**
+ * Build the per-call context: shared services plus this request's abort
+ * signal and a progress reporter. Progress goes out only if the client sent a
+ * progressToken; values are forced to increase, as the spec requires.
+ */
+function callContext(services: Omit<OpContext, 'signal'>, reqCtx: ServerContext): OpContext {
+  const token = reqCtx.mcpReq._meta?.progressToken;
+  let last = -Infinity;
+  const progress =
+    token === undefined
+      ? undefined
+      : (value: number, total?: number, message?: string) => {
+          if (value <= last) return;
+          last = value;
+          // Fire and forget: a lost progress update must never fail the operation.
+          reqCtx.mcpReq
+            .notify({
+              method: 'notifications/progress',
+              params: { progressToken: token, progress: value, ...(total !== undefined ? { total } : {}), ...(message ? { message } : {}) },
+            })
+            .catch(() => undefined);
+        };
+  return { ...services, signal: reqCtx.mcpReq.signal, progress };
+}
+
+/**
+ * Run one operation for a tool call. Operations with a `confirm` question
+ * first ask the user (when the client can show a dialog, see confirm.ts):
+ * the first call returns an "input required" result, the client's retry
+ * carries the answer and runs the operation.
+ */
+async function execute(server: McpServer, config: Config, op: Operation, args: unknown, ctx: OpContext, reqCtx: ServerContext): Promise<unknown> {
   try {
+    if (op.confirm && config.confirm !== 'never') {
+      const question = await op.confirm(args as never, ctx);
+      if (question) {
+        const step = confirmStep(server, reqCtx, question);
+        if (step.kind === 'ask') return step.result;
+        if (step.kind === 'declined') {
+          return toToolResult({ data: { cancelled: true, message: 'The user declined, so nothing was changed. Ask them how to proceed.' } });
+        }
+      }
+    }
     return toToolResult(await op.run(args as never, ctx));
   } catch (err) {
     return toErrorResult(err);
@@ -73,6 +117,8 @@ function catalogEntry(op: Operation) {
   return { operation: op.name, tool: toolName(op), group: op.group, read_only: op.readOnly, description: op.description };
 }
 
+const HOUR = 60 * 60 * 1000;
+
 export function buildServer(config: Config, services: Omit<OpContext, 'signal'>): McpServer {
   const ops = enabledOperations(config);
   const byName = new Map(ops.map((op) => [op.name, op]));
@@ -82,9 +128,22 @@ export function buildServer(config: Config, services: Omit<OpContext, 'signal'>)
     {
       instructions: buildInstructions(config.mode),
       // The tool list never changes during a session, so clients may cache it.
-      cacheHints: { 'tools/list': { ttlMs: 60 * 60 * 1000, cacheScope: 'private' }, 'server/discover': { ttlMs: 60 * 60 * 1000, cacheScope: 'private' } },
+      // Tools and prompts never change during a session, so clients may cache
+      // them; resource lists follow the project's files, so they're never cached.
+      cacheHints: {
+        'tools/list': { ttlMs: HOUR, cacheScope: 'private' },
+        'prompts/list': { ttlMs: HOUR, cacheScope: 'private' },
+        'resources/templates/list': { ttlMs: HOUR, cacheScope: 'private' },
+        'resources/list': { ttlMs: 0, cacheScope: 'private' },
+        'resources/read': { ttlMs: 0, cacheScope: 'private' },
+        'server/discover': { ttlMs: HOUR, cacheScope: 'private' },
+      },
     },
   );
+
+  // --- Resources and prompts ----------------------------------------------
+  registerResources(server, services);
+  registerPrompts(server, config.projectPath);
 
   // --- Native tools -------------------------------------------------------
   const native = config.mode === 'full' ? ops : ops.filter((op) => op.core);
@@ -99,7 +158,7 @@ export function buildServer(config: Config, services: Omit<OpContext, 'signal'>)
         // Claude Code: load these up front even when it defers MCP tools.
         ...(op.alwaysLoad ? { _meta: { 'anthropic/alwaysLoad': true } } : {}),
       },
-      (async (args: unknown, reqCtx: { mcpReq: { signal: AbortSignal } }) => execute(op, args, { ...services, signal: reqCtx.mcpReq.signal })) as never,
+      (async (args: unknown, reqCtx: ServerContext) => execute(server, config, op, args, callContext(services, reqCtx), reqCtx)) as never,
     );
   }
 
@@ -148,7 +207,7 @@ export function buildServer(config: Config, services: Omit<OpContext, 'signal'>)
     });
 
     const route = (wantReadOnly: boolean) =>
-      (async ({ operation, args }: { operation: string; args: Record<string, unknown> }, reqCtx: { mcpReq: { signal: AbortSignal } }) => {
+      (async ({ operation, args }: { operation: string; args: Record<string, unknown> }, reqCtx: ServerContext) => {
         const op = byName.get(operation) ?? ops.find((o) => toolName(o) === operation);
         if (!op) {
           return toErrorResult(new OpError('UNKNOWN_METHOD', `Unknown operation "${operation}". Use godot_tools with action "search" to list operations.`));
@@ -164,7 +223,7 @@ export function buildServer(config: Config, services: Omit<OpContext, 'signal'>)
             new OpError('BAD_PARAMS', `Invalid args for "${operation}": ${z.prettifyError(parsed.error)}`, { input_schema: z.toJSONSchema(op.input) }),
           );
         }
-        return execute(op, parsed.data, { ...services, signal: reqCtx.mcpReq.signal });
+        return execute(server, config, op, parsed.data, callContext(services, reqCtx), reqCtx);
       }) as never;
 
     server.registerTool(

@@ -87,6 +87,15 @@ export interface Operation<S extends z.ZodObject = z.ZodObject> {
   core?: boolean;
   /** Ask Claude Code to load this tool up front even when it defers MCP tools. */
   alwaysLoad?: boolean;
+  /**
+   * Ask the user before running this call. Return the question to show (e.g.
+   * "Delete res://old.gd? This cannot be undone.") or undefined to skip.
+   * When the client supports elicitation the server shows it as a yes/no
+   * dialog and only runs the operation if the user agrees; otherwise the
+   * client's own permission prompt (driven by destructiveHint) is the guard.
+   * Reserve it for work that can't be undone. See src/mcp/confirm.ts.
+   */
+  confirm?: (args: z.infer<S>, ctx: OpContext) => string | undefined | Promise<string | undefined>;
   run(args: z.infer<S>, ctx: OpContext): Promise<OpResult>;
 }
 

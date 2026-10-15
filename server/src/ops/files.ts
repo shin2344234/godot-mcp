@@ -313,6 +313,9 @@ export const filesDelete = defineOp({
   input: z.object({ path: z.string(), recursive: z.boolean().default(false) }),
   readOnly: false,
   destructive: true,
+  // Deleting is the one file operation nothing can undo (no editor history,
+  // no trash), so ask the user when the client can show a dialog.
+  confirm: ({ path: p, recursive }) => `Delete ${p}${recursive ? ' and everything inside it' : ''}? This cannot be undone.`,
   async run({ path: p, recursive }, ctx) {
     const file = await resolve(ctx, p);
     assertWritable(file);
