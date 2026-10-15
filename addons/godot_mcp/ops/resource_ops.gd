@@ -250,7 +250,7 @@ static func set_properties(params: Variant, env: Dictionary) -> Dictionary:
 		var now: Variant = res.get_indexed(NodePath(key))
 		changed[key] = RU.encode_value(now, 1)
 		var wanted: Variant = plan["value"]
-		if typeof(now) == typeof(wanted) and not wanted is Object and now != wanted:
+		if Codec.read_back_differs(now, wanted):
 			warnings.append("'%s' reads back as %s, not the requested value (Godot clamped or adjusted it)." % [key, JSON.stringify(changed[key])])
 	var out: Dictionary = {"path": path, "class": res.get_class(), "changed": changed, "saved": true, "undoable": editor}
 	if not warnings.is_empty():

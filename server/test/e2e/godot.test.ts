@@ -78,6 +78,10 @@ describe.skipIf(!enabled)('headless backend', () => {
       await client.callTool({ name: 'godot_node_set', arguments: { scene: 'res://main.tscn', path: 'Nested', properties: { 'material:blend_mode': 'add', 'position:x': 7 } } }),
     );
     expect(set.changed['position:x']).toBe(7);
+    // Node2D.rotation is a 32-bit float: 1.6 reads back as 1.60000002384186, which is not a
+    // clamp and must not warn (MCP_TEST_LOG: speed_scale=1.6 did).
+    const rot = json(await client.callTool({ name: 'godot_node_set', arguments: { scene: 'res://main.tscn', path: 'Nested', properties: { rotation: 1.6, skew: 0.3 } } }));
+    expect(rot.warnings).toBeUndefined();
     const got = json(await client.callTool({ name: 'godot_node_get', arguments: { scene: 'res://main.tscn', path: 'Nested', properties: ['position'] } }));
     expect(got.properties.position).toBe('Vector2(7, 0)');
     // CanvasItemMaterial.BLEND_MODE_ADD == 1, saved inside the scene's sub-resource.

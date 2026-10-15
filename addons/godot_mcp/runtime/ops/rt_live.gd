@@ -505,7 +505,7 @@ static func _op_set(rt: Node, op: Dictionary) -> Dictionary:
 			node.set(pname, wanted)
 		var now: Variant = node.get_indexed(NodePath(pname))
 		changed[pname] = rt.encode(now)
-		if _differs(now, wanted):
+		if Codec.read_back_differs(now, wanted):
 			warnings.append("'%s' reads back as %s, not the requested value (Godot clamped or adjusted it, or a script setter changed it)." % [pname, JSON.stringify(changed[pname])])
 	var out: Dictionary = {"action": "set", "path": rt.path_of(node), "changed": changed}
 	if not warnings.is_empty():
@@ -513,15 +513,6 @@ static func _op_set(rt: Node, op: Dictionary) -> Dictionary:
 	return R.value(out)
 
 
-## True when a value read back after a set is not what was set (Godot clamped it, or a
-## setter changed it). Floats compare approximately: many engine properties store 32-bit
-## floats, so 0.1 reads back as 0.10000000149.
-static func _differs(now: Variant, wanted: Variant) -> bool:
-	if typeof(now) != typeof(wanted) or wanted is Object:
-		return false
-	if now is float:
-		return not is_equal_approx(now, wanted)
-	return now != wanted
 
 
 ## Decodes one value for `pname` on `node`: a property, or a nested path whose steps are

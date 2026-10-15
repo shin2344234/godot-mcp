@@ -100,6 +100,24 @@ static func to_json(v: Variant) -> String:
 # Encoding
 # ---------------------------------------------------------------------------------------
 
+## True when a value read back after a set is not what was set (Godot clamped it, or a
+## setter changed it), for the "reads back as" warnings of node.set, resource.set and
+## game.set. Floats compare approximately: a GDScript float is 64-bit, but many engine
+## properties store a 32-bit float, so 1.6 reads back as 1.60000002384186 (float32 keeps
+## about 7 significant digits; is_equal_approx allows a relative 1e-5). Vectors, colors,
+## quaternions and transforms use their own is_equal_approx for the same reason.
+static func read_back_differs(now: Variant, wanted: Variant) -> bool:
+	if typeof(now) != typeof(wanted) or wanted is Object:
+		return false
+	if now is float:
+		return not is_equal_approx(now, wanted)
+	match typeof(now):
+		TYPE_VECTOR2, TYPE_VECTOR3, TYPE_VECTOR4, TYPE_COLOR, TYPE_QUATERNION, TYPE_PLANE, \
+		TYPE_RECT2, TYPE_AABB, TYPE_TRANSFORM2D, TYPE_TRANSFORM3D, TYPE_BASIS:
+			return not now.is_equal_approx(wanted)
+	return now != wanted
+
+
 ## Converts any Variant into a JSON-safe value. `root` is the scene root used to express
 ## Node references as scene-relative paths (may be null).
 static func encode(v: Variant, root: Node = null, depth: int = 0) -> Variant:

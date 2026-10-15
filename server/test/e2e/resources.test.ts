@@ -94,10 +94,11 @@ describe.skipIf(!enabled)('resources (headless)', () => {
     const r = json(
       await call('godot_resource_set', {
         path: 'res://resources/sample_material.tres',
-        properties: { 'next_pass:albedo_color': [0, 1, 0], roughness: 0.25, 'albedo_color:a': 0.5 },
+        properties: { 'next_pass:albedo_color': [0, 1, 0], roughness: 0.25, 'albedo_color:a': 0.5, metallic: 0.3 },
       }),
     );
     expect(r.saved).toBe(true);
+    expect(r.warnings).toBeUndefined(); // metallic is float32: 0.3 reads back as 0.300000011920929
     expect(r.undoable).toBe(false);
     expect(r.changed['next_pass:albedo_color']).toBe('Color(0, 1, 0, 1)');
     const text = readFileSync(path.join(proj.dir, 'resources', 'sample_material.tres'), 'utf8');

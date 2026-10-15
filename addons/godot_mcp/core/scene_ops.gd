@@ -413,7 +413,7 @@ static func plan_node_set(root: Node, params: Variant) -> Dictionary:
 			var now: Variant = node.get_indexed(NodePath(pname))
 			changed[pname] = Codec.encode(now, root)
 			var wanted: Variant = new_values[pname]
-			if typeof(now) == typeof(wanted) and now != wanted and not (wanted is Object):
+			if Codec.read_back_differs(now, wanted):
 				warnings.append("'%s' reads back as %s, not the requested value (Godot clamped or adjusted it)." % [pname, JSON.stringify(changed[pname])])
 		var result: Dictionary = {"path": NodePaths.rel_path(root, node), "changed": changed}
 		if not warnings.is_empty():
