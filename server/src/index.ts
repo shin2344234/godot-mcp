@@ -43,11 +43,40 @@ async function runInitCommand(argv: string[]): Promise<number> {
   });
 }
 
+const USAGE = `godot-mcp ${SERVER_VERSION}: MCP server for the Godot 4 engine
+
+Usage:
+  godot-mcp [serve] [options]   Run the MCP server on stdio (what MCP clients launch)
+  godot-mcp init [options]      Install the editor addon into a Godot project and register
+                                the server with your agents (--dry-run, --remove, --yes,
+                                --agents claude-code,cursor,...)
+  godot-mcp version             Print the version
+
+Common options (each also has an environment variable):
+  --project <dir>    Godot project folder (GODOT_PROJECT_PATH; default: current folder)
+  --godot <path>     Godot 4 executable (GODOT_PATH)
+  --mode full|compact, --toolsets a,b,c, --read-only, --allow-eval
+
+Docs: https://github.com/shin2344234/godot-mcp
+`;
+
 function main(): void {
   const argv = process.argv.slice(2);
+  // --version / --help are checked before the command split below, which treats any
+  // leading "--flag" as an option of the default "serve" command (so `godot-mcp
+  // --project x` starts the server). Without this, `--version` would start a stdio
+  // server and wait for input instead of printing.
+  if (argv[0] === '--version' || argv[0] === '-v') {
+    process.stdout.write(SERVER_VERSION + '\n');
+    return;
+  }
+  if (argv[0] === '--help' || argv[0] === '-h' || argv[0] === 'help') {
+    process.stdout.write(USAGE);
+    return;
+  }
   const command = argv[0] && !argv[0].startsWith('--') ? argv[0] : 'serve';
 
-  if (command === '--version' || command === 'version') {
+  if (command === 'version') {
     process.stdout.write(SERVER_VERSION + '\n');
     return;
   }

@@ -90,6 +90,12 @@ export function checkVersions(root = REPO_ROOT) {
     problems.push(`server.json name "${serverJson.name}" != server/package.json mcpName "${pkg.mcpName}" (the MCP Registry requires them to match)`);
   }
 
+  // --- packaging/claude-plugin/.claude-plugin/plugin.json (Claude Code plugin) -------
+  // Optional so fixture copies without packaging/ still check. The .mcpb manifest has
+  // no version of its own: scripts/build-mcpb.mjs fills it in from server/package.json.
+  const pluginJson = 'packaging/claude-plugin/.claude-plugin/plugin.json';
+  if (existsSync(rel(pluginJson))) versions[pluginJson] = readJson(rel(pluginJson)).version;
+
   // --- compare -------------------------------------------------------------------------
   const expected = pkg.version;
   for (const [label, value] of Object.entries(versions)) {
@@ -138,6 +144,9 @@ export function setVersions(version, root = REPO_ROOT) {
   // server.json: the top-level "version" and each package "version" (the only "version"
   // keys in the file). Global flag: all of them.
   edit('server.json', /("version"\s*:\s*")[^"]*(")/g, `$1${version}$2`);
+  // Claude Code plugin manifest: its single top-level "version".
+  const pluginJson = 'packaging/claude-plugin/.claude-plugin/plugin.json';
+  if (existsSync(rel(pluginJson))) edit(pluginJson, /^(\s*"version"\s*:\s*")[^"]*(")/m, `$1${version}$2`);
 }
 
 // Run as a CLI only when executed directly (not when imported by the unit test).
