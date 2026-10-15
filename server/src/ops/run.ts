@@ -18,6 +18,7 @@ import { existsSync } from 'node:fs';
 import { z } from 'zod';
 import { OpError } from '../errors.js';
 import { findGodot, GODOT_NOT_FOUND_HINT } from '../godot/binary.js';
+import type { GameRun } from '../godot/runs.js';
 import { log } from '../log.js';
 import { defineOp } from './types.js';
 
@@ -133,6 +134,45 @@ export const runStop = defineOp({
   },
 });
 
+/**
+ * run.output's errors view: the structured errors and warnings the game reported through
+ * the debugger (`run.errors`, each with its script backtrace), paged by error seq.
+ * Identical entries in a page (same text and stack, e.g. an error raised every frame) are
+ * merged into one with a `count`, so one noisy error can't fill the page.
+ */
+function errorPage(run: GameRun, since: number, limit: number, level: 'all' | 'warning' | 'error') {
+  const where = (f: { file: string; function: string; line: number }) => `${f.file}:${f.line} in ${f.function}()`;
+  let list = run.errors.filter((e) => e.seq >= since);
+  if (level === 'error') list = list.filter((e) => e.level === 'error');
+  const page = list.slice(0, limit);
+  const merged = new Map<string, Record<string, unknown>>();
+  for (const e of page) {
+    const stack = e.stack.map(where);
+    const key = JSON.stringify([e.level, e.message, e.detail, stack, stack.length ? '' : where(e.source)]);
+    const seen = merged.get(key);
+    if (seen) {
+      seen.count = Number(seen.count ?? 1) + 1;
+      continue;
+    }
+    merged.set(key, {
+      seq: e.seq,
+      ...(e.level === 'warning' ? { warning: true } : {}),
+      message: e.message,
+      ...(e.detail ? { detail: e.detail } : {}),
+      // The script line that raised it, then its callers (innermost first). The engine's
+      // C++ location only helps when no script was on the stack.
+      ...(stack.length ? { at: stack[0], ...(stack.length > 1 ? { callers: stack.slice(1) } : {}) } : { source: where(e.source) }),
+    });
+  }
+  return {
+    error_count: run.errors.filter((e) => e.level === 'error').length,
+    warning_count: run.errors.filter((e) => e.level === 'warning').length,
+    next: page.length > 0 ? page[page.length - 1]!.seq + 1 : since,
+    more: list.length > page.length,
+    errors: [...merged.values()],
+  };
+}
+
 export const runOutput = defineOp({
   name: 'run.output',
   group: 'run',
@@ -144,15 +184,17 @@ export const runOutput = defineOp({
     since: z.number().int().min(0).default(0),
     limit: z.number().int().min(1).max(2000).default(200),
     level: z.enum(['all', 'warning', 'error']).default('all'),
+    errors: z.boolean().optional().describe('Script errors with backtraces instead of lines (repeats merged).'),
   }),
   readOnly: true,
   idempotent: true,
   core: true,
-  async run({ run_id, since, limit, level }, ctx) {
+  async run({ run_id, since, limit, level, errors }, ctx) {
     const run = ctx.runs.get(run_id);
     if (!run) {
       throw new OpError('NOT_FOUND', run_id ? `No run with id "${run_id}".` : 'No game has been started by this server yet. Use godot_run_start (mode "process" to capture output).');
     }
+    if (errors) return { data: { run_id: run.id, running: run.running, exit_code: run.exitCode, ...errorPage(run, since, limit, level) } };
     const page = run.read(since, limit, level);
     return {
       data: {

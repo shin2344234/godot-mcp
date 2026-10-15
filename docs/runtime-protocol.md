@@ -43,7 +43,7 @@ runtime code is written once.
   elements, or the game logs `Condition "cmd.size() != 3"` and drops it). `thread_id` must
   be a thread the game listens on: the main thread's id, i.e. the one the game puts in its
   own messages (1 in practice).
-- Commands are routed by prefix to captures: `core:` (`breakpoint [line, source, set]`,
+- Commands are routed by prefix to captures: `core:` (`breakpoint [source, line, set]`,
   `set_skip_breakpoints [bool]`, `set_ignore_error_breaks [bool]`, `break []`,
   `reload_scripts`), `profiler:<name> [enable, options?]`, `scene:` (Godot's
   SceneDebugger, present in every debug build: `suspend_changed [bool]`, `next_frame []`,
@@ -52,7 +52,8 @@ runtime code is written once.
   bare commands `step`, `next`, `out`, `continue`, `get_stack_dump`,
   `get_stack_frame_vars [frame]` and `evaluate [expression, frame]`, and answers with
   `debug_enter [can_continue, error, has_stack, thread_id]`, `stack_dump`,
-  `stack_frame_vars`, `evaluation_return`... (`core/debugger/remote_debugger.cpp`).
+  `stack_frame_vars`, `evaluation_return`... (`core/debugger/remote_debugger.cpp`; every
+  layout is in [methods/debug.md](methods/debug.md)).
 - `--breakpoints res://a.gd:12,res://b.gd:30` sets breakpoints before the first frame.
 - With a debugger attached, a script error normally **stops the game** in that loop. Process
   runs send `core:set_ignore_error_breaks [true]` right after connecting (unless
