@@ -6,9 +6,12 @@
  * 1. private LSP editor: no editor connected, so the server starts its own headless editor
  *    (LSP-only mode: lsp_session.json, never session.json) and kills it on exit;
  * 2. connected editor: an editor launched through godot_editor_launch, whose language
- *    server port comes from editor settings. We point XDG_CONFIG_HOME at a temp folder with
- *    an editor_settings file using a free port, so the test never talks to some other
- *    editor's language server on the default 6005 (other Godot editors may be running).
+ *    server port comes from editor settings. We point the editor's config folder at a temp
+ *    folder with an editor_settings file using a free port, so the test never talks to some
+ *    other editor's language server on the default 6005 (other Godot editors may be running,
+ *    including the ones other e2e files launch in parallel). Godot reads its config folder
+ *    from XDG_CONFIG_HOME on Linux but from APPDATA on Windows (OS_Windows::get_config_path
+ *    in 4.7.2), so both are set. macOS uses ~/Library/Application Support and isn't covered.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -198,17 +201,23 @@ describe.skipIf(!enabled)('code tools: connected editor', () => {
   let client: Awaited<ReturnType<typeof startServer>>;
   let lspPort = 0;
   const call = async (name: string, args: Record<string, unknown>) => client.callTool({ name, arguments: args });
+  // Env for the server (inherited by the editor it launches) that points Godot's config folder
+  // at `config`: XDG_CONFIG_HOME on Linux, APPDATA on Windows. The server itself only reads
+  // APPDATA to find export templates, which these tests don't use.
+  const configEnv = (): Record<string, string> => ({ XDG_CONFIG_HOME: config, ...(process.platform === 'win32' ? { APPDATA: config } : {}) });
 
   beforeAll(async () => {
     importProject(proj.dir);
     lspPort = await freePort();
     // A private editor-settings file so this editor's language server gets its own port.
-    mkdirSync(path.join(config, 'godot'), { recursive: true });
+    // Godot names its folder "godot" on Linux and "Godot" elsewhere (Windows paths ignore case anyway).
+    const godotDir = path.join(config, process.platform === 'linux' ? 'godot' : 'Godot');
+    mkdirSync(godotDir, { recursive: true });
     writeFileSync(
-      path.join(config, 'godot', 'editor_settings-4.7.tres'),
+      path.join(godotDir, 'editor_settings-4.7.tres'),
       `[gd_resource type="EditorSettings" format=3]\n\n[resource]\nnetwork/language_server/remote_port = ${lspPort}\n`,
     );
-    client = await startServer({ project: proj.dir, era: 'legacy', env: { XDG_CONFIG_HOME: config } });
+    client = await startServer({ project: proj.dir, era: 'legacy', env: configEnv() });
     const launched = json(await call('godot_editor_launch', { headless: true, wait_seconds: 90 }));
     expect(launched.editor ?? launched.connected).toBeTruthy();
   }, 240_000);
@@ -244,7 +253,7 @@ describe.skipIf(!enabled)('code tools: connected editor', () => {
   it('falls back to script.validate when the language server is unreachable', async () => {
     // A second server whose LSP port points at nothing; the bridge itself still works.
     const deadPort = await freePort();
-    const second = await startServer({ project: proj.dir, era: 'legacy', env: { XDG_CONFIG_HOME: config, GODOT_MCP_LSP_PORT: String(deadPort) } });
+    const second = await startServer({ project: proj.dir, era: 'legacy', env: { ...configEnv(), GODOT_MCP_LSP_PORT: String(deadPort) } });
     try {
       const d = json(await second.callTool({ name: 'godot_code_diagnostics', arguments: { paths: ['res://broken.gd'] } }));
       expect(d.source).toMatch(/^script\.validate \(language server unavailable: .*not reachable on 127\.0\.0\.1:\d+/);
