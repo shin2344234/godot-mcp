@@ -218,9 +218,12 @@ static func _library_summary(lib_name: String, lib: AnimationLibrary) -> Diction
 	var anims: Array = []
 	for a: StringName in lib.get_animation_list():
 		anims.append(animation_summary(join_anim_name(lib_name, String(a)), lib.get_animation(a)))
+	var res_path: Variant = null  # Variant: a ternary mixing String and null is a lint error
+	if is_external(lib):
+		res_path = lib.resource_path
 	return {
 		"name": lib_name,
-		"resource": lib.resource_path if is_external(lib) else null,
+		"resource": res_path,
 		"animations": anims,
 	}
 

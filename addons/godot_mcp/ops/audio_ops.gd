@@ -108,6 +108,9 @@ static func buses_info() -> Array:
 				"enabled": AudioServer.is_bus_effect_enabled(i, e),
 				"properties": Codec.encode_object_properties(fx, null),
 			})
+		var send: Variant = null  # Master has no send
+		if i > 0:
+			send = String(AudioServer.get_bus_send(i))
 		var bus: Dictionary = {
 			"index": i,
 			"name": AudioServer.get_bus_name(i),
@@ -115,7 +118,7 @@ static func buses_info() -> Array:
 			"mute": AudioServer.is_bus_mute(i),
 			"solo": AudioServer.is_bus_solo(i),
 			"bypass_effects": AudioServer.is_bus_bypassing_effects(i),
-			"send": String(AudioServer.get_bus_send(i)) if i > 0 else null,
+			"send": send,
 			"effects": effects,
 		}
 		out.append(bus)

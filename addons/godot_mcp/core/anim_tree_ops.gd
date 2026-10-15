@@ -154,23 +154,23 @@ static func describe(node: AnimationNode, depth: int) -> Variant:
 		var transitions: Array = []
 		var starts: Array[String] = []
 		for t: int in range(sm.get_transition_count()):
-			var tr: AnimationNodeStateMachineTransition = sm.get_transition(t)
+			var trans: AnimationNodeStateMachineTransition = sm.get_transition(t)
 			var from: String = String(sm.get_transition_from(t))
 			if from == "Start":
 				starts.append(String(sm.get_transition_to(t)))
 			var te: Dictionary = {
 				"from": from,
 				"to": String(sm.get_transition_to(t)),
-				"switch_mode": SWITCH_MODES[tr.switch_mode],
-				"advance_mode": ADVANCE_MODES[tr.advance_mode],
-				"xfade_time": snappedf(tr.xfade_time, 0.0001),
+				"switch_mode": SWITCH_MODES[trans.switch_mode],
+				"advance_mode": ADVANCE_MODES[trans.advance_mode],
+				"xfade_time": snappedf(trans.xfade_time, 0.0001),
 			}
-			if not String(tr.advance_condition).is_empty():
-				te["advance_condition"] = String(tr.advance_condition)
-			if not tr.advance_expression.is_empty():
-				te["advance_expression"] = tr.advance_expression
-			if tr.priority != 1:
-				te["priority"] = tr.priority
+			if not String(trans.advance_condition).is_empty():
+				te["advance_condition"] = String(trans.advance_condition)
+			if not trans.advance_expression.is_empty():
+				te["advance_expression"] = trans.advance_expression
+			if trans.priority != 1:
+				te["priority"] = trans.priority
 			transitions.append(te)
 		out["transitions"] = transitions
 		out["start"] = starts
@@ -378,19 +378,19 @@ static func _child_from_op(op: Dictionary, where: String, ctx: Dictionary, base:
 	return _new_node(type, allowed, where, base)
 
 
-static func _transition_props(tr: AnimationNodeStateMachineTransition, op: Dictionary, where: String) -> Dictionary:
+static func _transition_props(trans: AnimationNodeStateMachineTransition, op: Dictionary, where: String) -> Dictionary:
 	if op.get("switch_mode") != null:
 		var i: int = SWITCH_MODES.find(str(op["switch_mode"]).to_lower())
 		if i < 0:
 			return R.err(R.BAD_PARAMS, "%s: 'switch_mode' must be one of %s, got '%s'." % [where, ", ".join(SWITCH_MODES), op["switch_mode"]])
-		tr.switch_mode = i as AnimationNodeStateMachineTransition.SwitchMode
+		trans.switch_mode = i as AnimationNodeStateMachineTransition.SwitchMode
 	if op.get("advance_mode") != null:
 		var j: int = ADVANCE_MODES.find(str(op["advance_mode"]).to_lower())
 		if j < 0:
 			return R.err(R.BAD_PARAMS, "%s: 'advance_mode' must be one of %s, got '%s'." % [where, ", ".join(ADVANCE_MODES), op["advance_mode"]])
-		tr.advance_mode = j as AnimationNodeStateMachineTransition.AdvanceMode
+		trans.advance_mode = j as AnimationNodeStateMachineTransition.AdvanceMode
 	if op.get("advance_condition") != null:
-		tr.advance_condition = StringName(str(op["advance_condition"]))
+		trans.advance_condition = StringName(str(op["advance_condition"]))
 	if op.get("advance_expression") != null:
 		var expr: String = str(op["advance_expression"])
 		if not expr.is_empty():
@@ -398,11 +398,11 @@ static func _transition_props(tr: AnimationNodeStateMachineTransition, op: Dicti
 			var e := Expression.new()
 			if e.parse(expr) != OK:
 				return R.err(R.BAD_PARAMS, "%s: 'advance_expression' does not parse: %s." % [where, e.get_error_text()])
-		tr.advance_expression = expr
+		trans.advance_expression = expr
 	if op.get("xfade_time") != null:
 		if not (op["xfade_time"] is float or op["xfade_time"] is int) or float(op["xfade_time"]) < 0.0:
 			return R.err(R.BAD_PARAMS, "%s: 'xfade_time' must be a number of seconds >= 0." % where)
-		tr.xfade_time = float(op["xfade_time"])
+		trans.xfade_time = float(op["xfade_time"])
 	return {}
 
 
@@ -521,16 +521,16 @@ static func _add_transition(sm: AnimationNodeStateMachine, from: String, to: Str
 		return R.err(R.BAD_PARAMS, "%s: transitions from a state to itself need allow_transition_to_self (set it with {\"op\": \"set\", \"properties\": {\"allow_transition_to_self\": true}})." % where)
 	if to == "Start" or from == "End":
 		return R.err(R.BAD_PARAMS, "%s: transitions cannot go into Start or out of End." % where)
-	var tr := AnimationNodeStateMachineTransition.new()
+	var trans := AnimationNodeStateMachineTransition.new()
 	# Leaving Start or entering End should happen by itself unless told otherwise; this is
 	# what makes the start state actually play.
 	if from == "Start" or to == "End":
-		tr.advance_mode = AnimationNodeStateMachineTransition.ADVANCE_MODE_AUTO
-	var perr: Dictionary = _transition_props(tr, op, where)
+		trans.advance_mode = AnimationNodeStateMachineTransition.ADVANCE_MODE_AUTO
+	var perr: Dictionary = _transition_props(trans, op, where)
 	if not perr.is_empty():
 		return perr
-	sm.add_transition(StringName(from), StringName(to), tr)
-	return R.value({"op": kind, "from": from, "to": to, "switch_mode": SWITCH_MODES[tr.switch_mode], "advance_mode": ADVANCE_MODES[tr.advance_mode]})
+	sm.add_transition(StringName(from), StringName(to), trans)
+	return R.value({"op": kind, "from": from, "to": to, "switch_mode": SWITCH_MODES[trans.switch_mode], "advance_mode": ADVANCE_MODES[trans.advance_mode]})
 
 
 # --- blend spaces --------------------------------------------------------------------------
@@ -681,12 +681,12 @@ static func _op_set(target: AnimationNode, op: Dictionary, where: String, ctx: D
 				found = t
 		if found < 0:
 			return R.err(R.NOT_FOUND, "%s: there is no transition %s -> %s." % [where, from, to])
-		var tr: AnimationNodeStateMachineTransition = sm.get_transition(found)
+		var trans: AnimationNodeStateMachineTransition = sm.get_transition(found)
 		# Transition fields may be given directly on the op as well as in properties.
-		var terr: Dictionary = _transition_props(tr, op, where)
+		var terr: Dictionary = _transition_props(trans, op, where)
 		if not terr.is_empty():
 			return terr
-		obj = tr
+		obj = trans
 		label = "transition %s -> %s" % [from, to]
 	elif op.get("name") != null:
 		var nav: Dictionary = _navigate(target, str(op["name"]))
