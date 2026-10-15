@@ -214,6 +214,11 @@ export class RunManager {
     const release = runtimeInstalled(projectPath) ? await injectRuntime(projectPath) : undefined;
     session.once('connected', () => {
       if (!opts.breakOnErrors) session.send('core:set_ignore_error_breaks', [true]);
+      // Godot's SceneDebugger disables game input after a suspend/resume unless the
+      // "runtime node select" type is NONE (0). It defaults to 2D and only the editor's
+      // Game view resets it, so a game we launch would lose input after the first
+      // godot_game_time pause/resume. Reset it once, for every tool that pauses.
+      session.send('scene:runtime_node_select_set_type', [0]);
     });
 
     log.info(`Starting game: ${godotPath} ${args.join(' ')}`);
