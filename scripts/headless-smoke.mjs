@@ -9,7 +9,7 @@
 // and parses the single "@@GODOT_MCP_RESULT@@" line. Exits 0 when all checks pass.
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -244,4 +244,6 @@ e = err("script.validate", {});
 check(e.code === "BAD_PARAMS", "script.validate needs path or source", e);
 
 console.log(failures === 0 ? `headless-smoke: all checks passed (${reqCount} runner invocations)` : `headless-smoke: ${failures} check(s) failed`);
+// Remove the per-run folder of request files (one req*.json per invocation).
+rmSync(reqDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 process.exit(failures === 0 ? 0 : 1);

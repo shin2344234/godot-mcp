@@ -19,6 +19,39 @@ const TSX = path.join(SERVER_ROOT, 'node_modules', '.bin', 'tsx');
 /** Godot binary for e2e tests (tests needing Godot are skipped without it). */
 export const GODOT_BIN = process.env.GODOT_BIN ?? process.env.GODOT_PATH;
 
+/**
+ * Delete a temp project folder.
+ *
+ * On Windows a Godot process we just killed can keep file handles open for a
+ * moment, so a plain rmSync fails with EPERM/EBUSY. Node's rmSync retries
+ * those errors when maxRetries is set (with linear backoff), which covers the
+ * gap without slowing down Linux/macOS, where the first attempt succeeds.
+ */
+export function removeDir(dir: string): void {
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+}
+
+/**
+ * Kill a process and wait (up to timeoutMs) until it has actually exited.
+ * process.kill(pid, 0) throws ESRCH once the pid is gone; it sends no signal.
+ */
+export async function killAndWait(pid: number, timeoutMs = 10_000): Promise<void> {
+  try {
+    process.kill(pid);
+  } catch {
+    return; // already gone
+  }
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
 export type Era = 'legacy' | 'modern';
 
 export async function startServer(opts: { project: string; era?: Era; env?: Record<string, string>; args?: string[] }) {
@@ -61,7 +94,7 @@ export function makeMiniProject(): { dir: string; cleanup: () => void } {
     ].join('\n'),
   );
   writeFileSync(path.join(dir, 'game.gd'), 'extends Node\n\nfunc _ready() -> void:\n\tprint("hi")\n');
-  return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  return { dir, cleanup: () => removeDir(dir) };
 }
 
 /** Copy the sample project (with the addon synced in) to a temp folder. */
@@ -70,7 +103,7 @@ export function copySampleProject(): { dir: string; cleanup: () => void } {
   cpSync(SAMPLE_PROJECT, dir, { recursive: true });
   // The addon lives at the repo root; the sample project gets a copy.
   cpSync(path.join(REPO_ROOT, 'addons', 'godot_mcp'), path.join(dir, 'addons', 'godot_mcp'), { recursive: true });
-  return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  return { dir, cleanup: () => removeDir(dir) };
 }
 
 /** Parse the JSON text block of a tool result. */

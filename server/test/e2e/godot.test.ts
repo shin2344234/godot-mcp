@@ -13,7 +13,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { copySampleProject, GODOT_BIN, json, startServer } from './helpers.js';
+import { copySampleProject, GODOT_BIN, json, killAndWait, startServer } from './helpers.js';
 
 const enabled = Boolean(GODOT_BIN);
 
@@ -109,12 +109,14 @@ describe.skipIf(!enabled)('editor backend', () => {
 
   afterAll(async () => {
     await client?.close();
-    // Stop the editor we launched (its pid is in the session file).
+    // Stop the editor we launched (its pid is in the session file) and wait
+    // for it to exit: on Windows its open file handles would otherwise make
+    // deleting the temp project fail with EPERM.
     try {
       const session = JSON.parse(readFileSync(path.join(proj.dir, '.godot', 'godot_mcp', 'session.json'), 'utf8'));
-      process.kill(session.pid);
+      await killAndWait(session.pid);
     } catch {
-      // already gone
+      // no session file: the editor never came up
     }
     proj.cleanup();
   });
