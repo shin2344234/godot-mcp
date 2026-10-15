@@ -36,6 +36,11 @@ func _setup_session(session_id: int) -> void:
 	var session: EditorDebuggerSession = get_session(session_id)
 	session.started.connect(_on_started.bind(session_id))
 	session.stopped.connect(_on_stopped.bind(session_id))
+	# Breakpoint/error stops in the editor's debugger. The server fails its pending runtime
+	# requests on "game.breaked" right away (a stopped game can't answer them) instead of
+	# letting them run into their timeout (server/src/game/hub.ts, EditorTransport).
+	session.breaked.connect(_on_breaked.bind(session_id))
+	session.continued.connect(_on_continued.bind(session_id))
 
 
 func _on_started(session_id: int) -> void:
@@ -43,6 +48,17 @@ func _on_started(session_id: int) -> void:
 	Override.restore()
 	if broadcast.is_valid():
 		broadcast.call("game.started", {"session": session_id})
+
+
+## EditorDebuggerSession.breaked(can_debug): the game entered its debug loop.
+func _on_breaked(can_debug: bool, session_id: int) -> void:
+	if broadcast.is_valid():
+		broadcast.call("game.breaked", {"session": session_id, "can_debug": can_debug})
+
+
+func _on_continued(session_id: int) -> void:
+	if broadcast.is_valid():
+		broadcast.call("game.continued", {"session": session_id})
 
 
 func _on_stopped(session_id: int) -> void:

@@ -29,6 +29,18 @@ content scale) before sending, because `Input.parse_input_event` expects window
 coordinates and `Viewport._make_input_local` applies the inverse. Results include
 `viewport: [w, h]`; a node outside it, or inside a SubViewport, gets a `note`.
 
+**Mouse position in a window.** In a windowed game `Viewport.get_mouse_position()` is not
+taken from events: Godot computes it from the real OS pointer
+(`DisplayServer.mouse_get_position()`, `scene/main/viewport.cpp`). So before every injected
+mouse event the runtime also warps the OS pointer to the event position
+(`Input.warp_mouse`, window pixels); a game that aims with `get_mouse_position()` then sees
+the click position. It is skipped headless (no `FEATURE_MOUSE`; there the viewport already
+uses the last event position) and in `MOUSE_MODE_CAPTURED`. Side effects: the user's real
+pointer moves over a windowed game, and the OS reports the warp back, so the game may see
+one extra `InputEventMouseMotion` at the same position (a recording captures it too). When
+`get_mouse_position()` still disagrees after a `move`/`click` (the OS refused the warp, e.g.
+an unfocused window on Windows), the step carries `mouse_position` and a `warning`.
+
 **Headless runs** start with a 64x64 root window (`DisplayServerHeadless` reports no window
 size), so anchored UI is squashed and nothing past 64 px can be clicked. The first input
 call (or replay) sets the root viewport to the project's window size
@@ -52,6 +64,21 @@ before the first one runs. Step fields:
 | `joy_axis` | `axis` (left_x, left_y, right_x, right_y, trigger_left, trigger_right, or a number), `value` (-1..1), `device`, `ms` | sets the axis; with `ms`, holds it that long and returns it to 0 |
 | `touch` | `at`, `to`?, `device` (finger index), `phase`, `ms`, `steps` | screen touch tap, or a drag with `to`. By default Godot also emulates a mouse click from it (`input_devices/pointing/emulate_mouse_from_touch`) |
 | `wait` | `ms` and/or `frames` | real-time wait (max 120 s) / process frames |
+
+**Paused game.** While the game is suspended (`godot_game_time pause`), Godot disables the
+root viewport's input and no node processes, so events are **dropped, not queued**: stepping
+frames afterwards does not apply them. The result then has `"discarded": true` and a warning
+saying so (also for `record.replay`). Resume first, then send the input.
+
+**Breakpoints.** When a step makes the game stop in the debugger (a breakpoint in an input
+handler, a script error with `break_on_errors`, a debugger pause), the call returns at once
+with `{ "completed": false, "stopped": { "reason", "at": { "file", "line", "function" }, "error"? }, "note" }`
+instead of waiting for its timeout; the remaining steps run after the game resumes
+(`godot_debug_control continue`). This holds for every runtime call (`server/src/game/runtime.ts`,
+`GameStoppedError`); games started from the editor report `reason: "debugger"` (the editor's
+debugger holds the details). Calls made while the game is already stopped wait at most 3 s:
+synchronous ones (`godot_game_tree`, `godot_game_get`) still answer from Godot's debug loop,
+ones that need frames can't until it resumes.
 
 `phase`: `tap` (default: press, hold, release), `press` or `release` (keep a key or button
 held across steps, e.g. `press move_right`, `wait 500`, `release move_right`). `ms` on a tap

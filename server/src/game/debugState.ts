@@ -374,6 +374,8 @@ export class DebugState extends EventEmitter {
       const errors: GameMessage[] = [];
       const onError = (m: GameMessage) => errors.push(m);
       this.session.on('message:error', onError);
+      // Keep the evaluation's own error out of the game's error list (see GameRun.beginEvaluate).
+      this.run.beginEvaluate();
       try {
         const reply = this.session.waitFor('evaluation_return', QUERY_TIMEOUT_MS);
         this.sendStopped('evaluate', [expression, frame]);
@@ -391,6 +393,7 @@ export class DebugState extends EventEmitter {
         return { value: result.value, type: result.type, typeHint: result.typeHint, ...(text && result.value === null ? { error: text } : {}) };
       } finally {
         this.session.off('message:error', onError);
+        this.run.endEvaluate();
       }
     });
   }

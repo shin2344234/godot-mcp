@@ -45,7 +45,8 @@ async function fakeGame(reply: (cmd: Cmd, game: { send: (msg: string, data: Enco
 
 /** A stand-in GameRun: only the fields DebugState reads. */
 function fakeRun(initialBreakpoints: string[] = []): GameRun {
-  return { errors: [], initialBreakpoints } as unknown as GameRun;
+  // beginEvaluate/endEvaluate: GameRun's hooks that keep evaluate errors out of run.errors.
+  return { errors: [], initialBreakpoints, beginEvaluate: () => undefined, endEvaluate: () => undefined } as unknown as GameRun;
 }
 
 const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));

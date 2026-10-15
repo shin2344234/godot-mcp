@@ -243,9 +243,10 @@ describe.skipIf(!enabled)('game input/time/record: process run (headless)', () =
     const stepped = await time({ action: 'step', frames: 3 });
     expect(stepped).toMatchObject({ stepped: 3, suspended: true });
     expect(await read('ticks')).toBe(t0 + 3);
-    // Input while paused is accepted but flagged.
+    // Input while paused is accepted but flagged as discarded (Godot drops it, nothing queues).
     const warn = await input([{ type: 'key', key: 'Space' }]);
-    expect(warn.warnings.join(' ')).toMatch(/The game is paused/);
+    expect(warn.warnings.join(' ')).toMatch(/The game is paused.*discarded/);
+    expect(warn.discarded).toBe(true);
     const resumed = await time({ action: 'resume' });
     expect(resumed).toMatchObject({ suspended: false, game_time_scale: 1, effective_time_scale: 1 });
     expect(await waitFor(async () => Number(await read('ticks')) > t0 + 10)).toBe(true);
@@ -360,7 +361,15 @@ describe.skipIf(!enabled || !process.env.DISPLAY)('windowed game and write_movie
     const r = json(await call('godot_game_input', { steps: [{ type: 'click', at: 'Start' }] }));
     expect(r.warnings).toBeUndefined(); // no headless resize
     expect(r.steps[0]).toMatchObject({ hit: 'Start', handled: true });
+    expect(r.steps[0].warning).toBeUndefined(); // the pointer got there (see below)
     expect(await read('clicks')).toBe(1);
+    // In a window, get_mouse_position() follows the real OS pointer, not the events; the
+    // runtime warps the pointer with every injected mouse event so games that aim with it
+    // see the click position (Start spans 100..220 x 100..140: center 160, 120).
+    expect(await read('get_viewport().get_mouse_position()')).toBe('Vector2(160, 120)');
+    const moved = json(await call('godot_game_input', { steps: [{ type: 'move', at: [500, 300] }] }));
+    expect(moved.steps[0].warning).toBeUndefined();
+    expect(await read('get_viewport().get_mouse_position()')).toBe('Vector2(500, 300)');
     expect(json(await call('godot_game_time', { action: 'pause' })).suspended).toBe(true);
     const t0 = Number(await read('ticks'));
     // Here SceneDebugger re-suspends on the real frame_post_draw (no headless helper).

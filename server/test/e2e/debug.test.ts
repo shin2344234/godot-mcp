@@ -74,6 +74,26 @@ const ERR_GD = [
   '',
 ].join('\n');
 
+// Input handler for "input that hits a breakpoint": line 7 runs on every key press.
+const INP_GD = [
+  'extends Node', // 1
+  '', // 2
+  'var presses := 0', // 3
+  '', // 4
+  'func _unhandled_input(event: InputEvent) -> void:', // 5
+  '\tif event is InputEventKey and event.pressed:', // 6
+  '\t\tpresses += 1', // 7
+  '',
+].join('\n');
+
+const INP_TSCN = `[gd_scene format=3]
+
+[ext_resource type="Script" path="res://inp.gd" id="1"]
+
+[node name="Inp" type="Node"]
+script = ExtResource("1")
+`;
+
 const ERR_TSCN = `[gd_scene format=3]
 
 [ext_resource type="Script" path="res://err.gd" id="1"]
@@ -110,6 +130,8 @@ describe.skipIf(!enabled)('debug: process runs', () => {
     writeFileSync(path.join(proj.dir, 'dbg.tscn'), DBG_TSCN);
     writeFileSync(path.join(proj.dir, 'err.gd'), ERR_GD);
     writeFileSync(path.join(proj.dir, 'err.tscn'), ERR_TSCN);
+    writeFileSync(path.join(proj.dir, 'inp.gd'), INP_GD);
+    writeFileSync(path.join(proj.dir, 'inp.tscn'), INP_TSCN);
     spawnSync(GODOT_BIN!, ['--headless', '--path', proj.dir, '--import'], { timeout: 180_000, stdio: 'ignore' });
     client = await startServer({ project: proj.dir, era: 'modern' });
   }, 240_000);
@@ -172,6 +194,14 @@ describe.skipIf(!enabled)('debug: process runs', () => {
       expect(errorText(await call('godot_debug_control', { action: 'evaluate', expression: 'bogus(' }))).toMatch(/Evaluating "bogus\(" failed: .*parse error/);
       expect(errorText(await call('godot_debug_control', { action: 'evaluate', expression: 'no_such_name' }))).toMatch(/no_such_name/);
       expect(errorText(await call('godot_debug_control', { action: 'evaluate', expression: '1', frame: 5 }))).toMatch(/Frame 5 doesn't exist; the stack has 2/);
+      // Godot's error text and our hint are separate sentences.
+      expect(errorText(await call('godot_debug_control', { action: 'evaluate', expression: 'no_such_name' }))).toMatch(/[.!?:] Expressions use Godot's Expression class/);
+      // Failed evaluations are not game errors: not in errors: true, not in the counts.
+      await new Promise((r) => setTimeout(r, 500)); // let the game's stderr copies arrive
+      const errs = json(await call('godot_run_output', { run_id, errors: true }));
+      expect(errs.error_count, JSON.stringify(errs)).toBe(0);
+      const lines = json(await call('godot_run_output', { run_id }));
+      expect(lines.errors, JSON.stringify(lines.lines)).toBe(0);
       // Still stopped at the same place.
       expect(json(await call('godot_debug_state', { variables: false })).stack[0]).toMatchObject({ line: 16 });
       json(await call('godot_debug_breakpoints', { action: 'remove', breakpoints: ['res://dbg.gd:16'] }));
@@ -236,6 +266,30 @@ describe.skipIf(!enabled)('debug: process runs', () => {
       expect(errorText(await call('godot_debug_state', { run_id }))).toMatch(/has exited/);
       expect(errorText(await call('godot_debug_control', { action: 'continue' }))).toMatch(/No game started with godot_run_start/);
       expect(errorText(await call('godot_debug_state', { run_id: 'editor' }))).toMatch(/mode: "process"/);
+    }, 60_000);
+  });
+
+  describe('runtime calls that hit a breakpoint', () => {
+    it('game_input reports the stop at once instead of timing out', async () => {
+      const run_id = await start({ scene: 'res://inp.tscn', breakpoints: ['res://inp.gd:7'] });
+      const t0 = Date.now();
+      const r = json(await call('godot_game_input', { run_id, steps: [{ type: 'key', key: 'Space' }] }));
+      // Used to be a TIMEOUT after ~15 s; the debug_enter arrives within milliseconds.
+      expect(Date.now() - t0).toBeLessThan(8_000);
+      expect(r, JSON.stringify(r)).toMatchObject({
+        run_id,
+        completed: false,
+        stopped: { reason: 'breakpoint', at: { file: 'res://inp.gd', line: 7, function: '_unhandled_input' } },
+      });
+      expect(r.note).toMatch(/godot_debug_state/);
+      // While stopped, synchronous runtime calls still answer.
+      expect(json(await call('godot_debug_state', { run_id }))).toMatchObject({ stopped: true, reason: 'breakpoint' });
+      // Clear the breakpoint and continue: the interrupted handler finishes.
+      json(await call('godot_debug_breakpoints', { run_id, action: 'clear' }));
+      expect(json(await call('godot_debug_control', { run_id, action: 'continue' })).running).toBe(true);
+      const got = json(await call('godot_game_get', { run_id, path: '/root/Inp', properties: ['presses'] }));
+      expect(got.properties.presses).toBe(1);
+      json(await call('godot_run_stop', { run_id }));
     }, 60_000);
   });
 

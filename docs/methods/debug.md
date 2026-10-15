@@ -79,7 +79,10 @@ params: `{ "action": "continue" | "pause" | "step_into" | "step_over" | "step_ou
   the game**; that is why it is here and not in the read-only `godot_debug_state`.
   Result `{ "expression", "frame", "value" }`. A parse or execution failure →
   `GODOT_ERROR` with Godot's message (Godot returns null and reports the reason as an
-  `error` message right after; the server waits briefly for it).
+  `error` message right after; the server waits briefly for it). That error carries the
+  stopped frame's backtrace and is also printed on the game's stderr, but it is not a game
+  error: it is kept out of `godot_run_output {errors: true}` and of the error counts, and its
+  output lines are shown with an `EVAL` tag instead of `ERROR`.
   Refused before reaching the game: no stack (after a pause), a frame index out of range,
   or a frame without an instance (static functions) — Godot's evaluate handler leaves its
   debug loop in those cases, which would silently resume the game.
@@ -132,7 +135,10 @@ freeze the game but are all recorded here.
 ```
 
 `since` / `next` page by error seq; `level: "error"` drops warnings (`warning: true`
-entries). Identical entries in a page are merged with a `count`, so an error raised every
+entries). The `errors` / `warnings` counts of the lines view (`godot_run_start`,
+`godot_run_output` without `errors`) count each printed error once (its `ERROR:` line, not
+the indented `at:` / backtrace lines under it), so they match `error_count` /
+`warning_count` here for errors that went through the debugger. Identical entries in a page are merged with a `count`, so an error raised every
 frame takes one entry. `detail` carries Godot's extra description when there is one;
 `source` (the C++ location) is given only when no script was on the stack.
 

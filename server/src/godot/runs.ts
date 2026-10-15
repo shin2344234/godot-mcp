@@ -33,7 +33,24 @@ export interface OutputLine {
   stream: 'stdout' | 'stderr';
   level: LineLevel;
   text: string;
+  /**
+   * True for the first line of an error or warning ("ERROR: ...", "WARNING: ..."), false
+   * for its continuation lines ("   at: ...", "   GDScript backtrace...", "   [0] ...").
+   * Counts use only head lines, so one error is one error in every view.
+   */
+  head?: boolean;
+  /**
+   * The line belongs to an error the debugger's "evaluate" caused (godot_debug_control
+   * evaluate), not to the game's own code; it is shown as info and never counted.
+   */
+  evaluate?: boolean;
 }
+
+/**
+ * How long after a failed evaluate its stderr copy may still arrive (stderr is a pipe and
+ * the debugger a socket, so the two copies of one error come in on their own schedules).
+ */
+const EVAL_OUTPUT_GRACE_MS = 5_000;
 
 const MAX_LINES = 5_000;
 const MAX_ERRORS = 500;
@@ -82,10 +99,22 @@ export function parseOutputError(data: unknown[]): Omit<RunError, 'seq'> | undef
  * continues them with indented "at:" lines, which inherit the previous level.
  */
 export function classifyLine(text: string, previous: LineLevel): LineLevel {
+  if (isHeadLine(text) === 'error') return 'error';
+  if (isHeadLine(text) === 'warning') return 'warning';
+  if (isContinuationLine(text)) return previous;
+  return 'info';
+}
+
+/** "error"/"warning" when the line STARTS an error or warning report, else undefined. */
+export function isHeadLine(text: string): 'error' | 'warning' | undefined {
   if (/^\s*(SCRIPT ERROR|USER ERROR|ERROR|Parse Error)\b/.test(text)) return 'error';
   if (/^\s*(USER WARNING|WARNING)\b/.test(text)) return 'warning';
-  if (/^\s+at:\s/.test(text) || /^\s+GDScript backtrace/.test(text) || /^\s+\[\d+\]\s/.test(text)) return previous;
-  return 'info';
+  return undefined;
+}
+
+/** Indented lines Godot prints under an error: "at: ...", the backtrace header and frames. */
+export function isContinuationLine(text: string): boolean {
+  return /^\s+at:\s/.test(text) || /^\s+GDScript backtrace/.test(text) || /^\s+\[\d+\]\s/.test(text);
 }
 
 export class GameRun {
@@ -104,6 +133,18 @@ export class GameRun {
   readonly channel: RuntimeChannel | undefined;
   /** Breakpoints passed at launch ("res://a.gd:12"), seeding the debug state's list. */
   initialBreakpoints: string[] = [];
+  /**
+   * Debugger evaluations in flight (godot_debug_control evaluate). A failed evaluation
+   * makes Godot report an "error" (with the stopped frame's backtrace, e.g. duck.gd:23 in
+   * _physics_process) through the debugger AND print it on stderr. Neither is a bug in the
+   * game, so while this is > 0 debugger errors are kept out of `errors`, and the matching
+   * output lines are marked `evaluate` (see beginEvaluate / endEvaluate).
+   */
+  private evaluating = 0;
+  /** Error texts of recent failed evaluations, to recognise late stderr lines by content. */
+  private evalTexts: { text: string; until: number }[] = [];
+  /** Level of the current evaluate-output block (continuation lines inherit it). */
+  private lastEval = false;
 
   constructor(
     private readonly child: ChildProcess,
@@ -116,6 +157,14 @@ export class GameRun {
       session.on('message:error', (m: GameMessage) => {
         const e = parseOutputError(m.data);
         if (!e) return;
+        // Raised by a debugger evaluate, not by the game: DebugState.evaluate reads it
+        // itself (its own listener), the game's error list must not show it.
+        if (this.evaluating > 0) {
+          // stderr prints Godot's description when there is one ("ERROR: <descr>"), else
+          // the failed condition; parseOutputError puts the condition first. Remember both.
+          this.rememberEvalText(e.message, e.detail);
+          return;
+        }
         this.errors.push({ seq: this.errorSeq++, ...e });
         if (this.errors.length > MAX_ERRORS) this.errors.shift();
       });
@@ -147,10 +196,60 @@ export class GameRun {
     return this.child.pid;
   }
 
+  /** Called by DebugState right before it sends "evaluate" (see `evaluating`). */
+  beginEvaluate(): void {
+    this.evaluating++;
+  }
+
+  /**
+   * Called when an evaluate is done (its error, if any, has arrived or the grace time
+   * passed). Late stderr lines of that error are still recognised by their text.
+   */
+  endEvaluate(): void {
+    this.evaluating = Math.max(0, this.evaluating - 1);
+  }
+
+  /** Remembers the texts of one evaluate error (they share `until`, which identifies them). */
+  private rememberEvalText(...texts: string[]): void {
+    const now = Date.now();
+    this.evalTexts = this.evalTexts.filter((t) => t.until > now);
+    const until = now + EVAL_OUTPUT_GRACE_MS;
+    for (const text of texts) if (text) this.evalTexts.push({ text, until });
+  }
+
+  /**
+   * Does this error/warning head line come from a debugger evaluate? Yes while one is in
+   * flight (the game is stopped then, so nothing else of the game runs), or when it repeats
+   * the text of an evaluate error that just arrived over the debugger. A recognised error
+   * is used up (both its remembered texts): a real game error with the same text later is
+   * counted normally.
+   */
+  private isEvalOutput(text: string): boolean {
+    if (this.evaluating > 0) return true;
+    const now = Date.now();
+    const hit = this.evalTexts.find((t) => t.until > now && text.includes(t.text));
+    if (!hit) return false;
+    this.evalTexts = this.evalTexts.filter((t) => t.until !== hit.until);
+    return true;
+  }
+
   private push(stream: 'stdout' | 'stderr', text: string): void {
-    const level = classifyLine(text, this.lastLevel);
+    const head = isHeadLine(text);
+    let level = classifyLine(text, this.lastLevel);
+    let evaluate = false;
+    if (head) {
+      evaluate = this.isEvalOutput(text);
+      this.lastEval = evaluate;
+    } else if (level !== 'info' && isContinuationLine(text)) {
+      // "at:" / backtrace lines belong to the report above them.
+      evaluate = this.lastEval;
+    } else {
+      this.lastEval = false;
+    }
     this.lastLevel = level;
-    this.lines.push({ seq: this.seq++, stream, level, text });
+    // Evaluate errors read as info (they're not the game's), tagged so they can be told apart.
+    if (evaluate) level = 'info';
+    this.lines.push({ seq: this.seq++, stream, level, text, ...(head && !evaluate ? { head: true } : {}), ...(evaluate ? { evaluate: true } : {}) });
     if (this.lines.length > MAX_LINES) {
       this.lines.shift();
       this.dropped++;
@@ -172,10 +271,17 @@ export class GameRun {
     };
   }
 
+  /**
+   * Error and warning counts of the output. Only head lines count: Godot prints one error
+   * as "ERROR: ..." plus indented "at:" / backtrace lines, and counting those too made
+   * run_start / run_output say errors: 2 where run_output errors: true said error_count: 1.
+   * Lines evicted from the ring buffer are no longer counted (`dropped` says how many).
+   */
   counts() {
     let errors = 0;
     let warnings = 0;
     for (const l of this.lines) {
+      if (!l.head) continue;
       if (l.level === 'error') errors++;
       else if (l.level === 'warning') warnings++;
     }
