@@ -157,6 +157,12 @@ func status() -> Dictionary:
 	var playing: Variant = EditorInterface.get_playing_scene()
 	if str(playing).is_empty():
 		playing = null
+	# EditorInterface.get_unsaved_scenes() only exists since Godot 4.7. Calling it directly
+	# is a parse error on 4.5/4.6, which would stop the whole plugin from loading there,
+	# so look it up at runtime (as editor_ui_ops.gd and scene_extra_ops.gd do).
+	var unsaved: Array = []
+	if EditorInterface.has_method(&"get_unsaved_scenes"):
+		unsaved = Array(EditorInterface.call(&"get_unsaved_scenes"))
 	return {
 		"godot_version": Constants.godot_version_string(),
 		"plugin_version": Constants.PLUGIN_VERSION,
@@ -164,7 +170,7 @@ func status() -> Dictionary:
 		"project_path": Constants.project_path(),
 		"edited_scene": _scene_path_or_null(edited),
 		"open_scenes": Array(EditorInterface.get_open_scenes()),
-		"unsaved_scenes": Array(EditorInterface.get_unsaved_scenes()),
+		"unsaved_scenes": unsaved,
 		"is_playing": EditorInterface.is_playing_scene(),
 		"playing_scene": playing,
 	}
