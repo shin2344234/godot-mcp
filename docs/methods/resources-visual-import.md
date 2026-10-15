@@ -182,7 +182,11 @@ params: `{ "scene"?, "path": "HUD/Panel", "preset"?: "full_rect", "resize_mode"?
   `resize_mode`: `minsize`, `keep_width`, `keep_height`, `keep_size`. Applied like the
   inspector: `layout_mode` becomes Anchors (unless the node is a scene root/uncontrolled),
   then `set_anchors_and_offsets_preset(preset, resize_mode, margin)` and the matching grow
-  directions.
+  directions. That call sizes the rect from the content minimum and ignores
+  `custom_minimum_size`, which Godot applies later by growing the rect in the grow
+  direction; with `custom_minimum_size` in the same call, the offsets of non-stretched axes
+  are written for that grown rect (e.g. `top_right`, margin 16, `[200, 30]` →
+  `[-216, 16, -16, 46]`).
 * `anchors` are set as given with the offsets unchanged; `offsets` are applied after.
 * `size_flags` values: `fill`, `expand`, `expand_fill`, `shrink_center`, `shrink_end`,
   `shrink_begin`, a list or `"fill|expand"`, or a number.

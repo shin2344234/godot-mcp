@@ -142,6 +142,14 @@ describe.skipIf(!enabled)('visual (headless)', () => {
     expect(text).toContain('anchors_preset = 15');
     expect(text).toContain('size_flags_horizontal = 3');
     expect(text).toContain('custom_minimum_size = Vector2(10, 20)');
+    // custom_minimum_size given in the same call shapes the returned offsets (MCP_TEST_LOG:
+    // top_right + [200, 0] reported the 65 px content width). Grow direction BEGIN on x for
+    // a right-anchored preset, END on y for a top one, BOTH for center.
+    json(await call('godot_node_add', { scene: 'res://ui/hud.tscn', parent: '.', type: 'Panel', name: 'Corner' }));
+    const corner = json(await call('godot_visual_layout', { scene: 'res://ui/hud.tscn', path: 'Corner', preset: 'top_right', margin: 16, custom_minimum_size: [200, 30] }));
+    expect(corner.offsets).toEqual([-216, 16, -16, 46]);
+    const mid = json(await call('godot_visual_layout', { scene: 'res://ui/hud.tscn', path: 'Corner', preset: 'center', custom_minimum_size: [120, 40] }));
+    expect(mid.offsets).toEqual([-60, -20, 60, 20]);
   }, 120_000);
 
   it('rejects layout on non-Controls and unknown presets', async () => {
