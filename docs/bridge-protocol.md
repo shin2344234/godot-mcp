@@ -185,9 +185,9 @@ property's declared `type` (and `hint`/`hint_string` for objects) from
   first segment should also be tolerated (strip it).
 * Results always report paths relative to the scene root (root = `"."`).
 
-## 5. Methods (step 1)
+## 5. Core scene, node, script and run methods
 
-Step 2 methods are registered by the area modules in `addons/godot_mcp/ops/` and documented per area:
+The other areas' methods are registered by the area modules in `addons/godot_mcp/ops/` and documented per area:
 [scenes, nodes, signals and batches](methods/scene-signals.md),
 [resources, visual authoring and import](methods/resources-visual-import.md),
 [animation and audio](methods/animation-audio.md),
@@ -376,7 +376,7 @@ with an increasing `seq`:
 ```
 
 (Game-process output is captured by the server in headless runs; editor-launched game
-output arrives with the runtime bridge in step 3.)
+output is read through the in-game runtime; see [runtime-protocol.md](runtime-protocol.md).)
 
 ### ping (E/H)
 

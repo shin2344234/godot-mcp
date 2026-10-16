@@ -1,4 +1,4 @@
-# Methods: test runs and editor UI helpers (step 3)
+# Methods: test runs and editor UI helpers
 
 Two MCP tools from `server/src/ops/testing.ts`:
 

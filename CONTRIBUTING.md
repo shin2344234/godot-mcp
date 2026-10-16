@@ -55,7 +55,7 @@ node /path/to/godot-mcp/server/dist/index.js init
 | `addons/godot_mcp/runtime/` | The in-game runtime autoload and its methods (`ops/rt_*.gd`) |
 | `examples/sample_project/` | Godot project used by the tests |
 | `scripts/` | GDScript test suite and helpers |
-| `docs/` | Protocols, per-area method references, user guides |
+| `docs/` | User guides, the tool list, per-area method references (`docs/methods/`), protocols; index in `docs/README.md` |
 
 Read [docs/bridge-protocol.md](docs/bridge-protocol.md) and [docs/runtime-protocol.md](docs/runtime-protocol.md) before changing anything that crosses the TypeScript/GDScript line.
 
@@ -105,7 +105,7 @@ If your change trips it, shorten descriptions and schema text first. Raise a lim
    - Editor/headless work: a method in `addons/godot_mcp/ops/<area>_ops.gd`, registered in that module's `methods()` (see the descriptor kinds in `addons/godot_mcp/core/methods.gd`). Mark editor-only methods with `"editor_only": true`.
    - Running-game work: a method in `addons/godot_mcp/runtime/ops/rt_<area>.gd`.
    - Errors must say what went wrong **and** how to fix it. The model reads them.
-3. **Docs.** Document the method in the matching `docs/methods/<area>.md`, and add the tool to the tools table in `README.md`.
+3. **Docs.** Document the method in the matching `docs/methods/<area>.md`, and add the tool to its group table in `docs/tools.md` (and update the tool counts there and in `docs/overview.md`). The root `README.md` stays a short description plus install steps; everything else belongs under `docs/`, linked from [docs/README.md](docs/README.md).
 4. **Tests.** A unit test for pure logic, an e2e test in `server/test/e2e/` for the real thing. Run the budget test.
 5. **New `.gd` files need their `.uid` files committed** (see below).
 

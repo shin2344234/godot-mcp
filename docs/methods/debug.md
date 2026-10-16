@@ -1,4 +1,4 @@
-# Methods: breakpoint debugging (step 3)
+# Methods: breakpoint debugging
 
 MCP tools `godot_debug_breakpoints`, `godot_debug_control` and `godot_debug_state`
 (`server/src/ops/debug.ts`, state in `server/src/game/debugState.ts`), plus the errors view

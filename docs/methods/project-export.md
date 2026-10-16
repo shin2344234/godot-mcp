@@ -1,4 +1,4 @@
-# Methods: project configuration and export (step 2)
+# Methods: project configuration and export
 
 Groups `project` and `export`. Addon side: `addons/godot_mcp/ops/project_ops.gd`
 (with `core/project_input.gd` and `core/project_validate.gd`) and

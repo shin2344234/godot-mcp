@@ -1,4 +1,4 @@
-# Methods: live game inspection, live changes and eval (step 3)
+# Methods: live game inspection, live changes and eval
 
 Runtime methods in `addons/godot_mcp/runtime/ops/rt_live.gd`, called over the runtime
 channel described in [runtime-protocol.md](../runtime-protocol.md) (`mcp:request` →

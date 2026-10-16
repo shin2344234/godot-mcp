@@ -121,7 +121,7 @@ The manual setups below still need the addon in your project for the live editor
 - **Ask your agent.** The `godot_addon_install` tool copies the addon that ships with the server into `addons/godot_mcp/` and enables it in `project.godot`. It asks before replacing an existing copy. `godot_status` reports an `addon_hint` when the addon is missing or older than the server's, so agents usually suggest this themselves. This is the easy path for the Claude Desktop bundle and the Claude Code plugin, where you never run `init`.
 - Run `npx -y @shin2344234/godot-mcp init --no-agents-md --no-claude-md --agents <your client>` once.
 - Copy `addons/godot_mcp/` from this repository into your project and enable **Godot MCP** in **Project > Project Settings > Plugins**.
-- Install it from the Godot asset library: see [asset-store.md](asset-store.md).
+- Download `godot_mcp-<version>.zip` from [GitHub Releases](https://github.com/shin2344234/godot-mcp/releases) and unpack it into your project folder (it contains `addons/godot_mcp/`), or install it from the editor's Asset Store tab once it is listed there.
 
 After installing or updating the addon, reopen the project in Godot so the plugin starts.
 
@@ -372,7 +372,7 @@ Pass options as arguments after the package name, or as environment variables in
 | | `GODOT_MCP_LSP_IDLE_MS` | `600000` | Stop the private language server editor after this long unused |
 | | `GODOT_MCP_LOG_LEVEL` | `info` | `debug` for troubleshooting (logs go to stderr) |
 
-Tool groups for `--toolsets`: `core`, `files`, `scene`, `node`, `script`, `run`, `editor`, `signal`, `resource`, `visual`, `anim`, `world`, `audio`, `project`, `import`, `export`, `code`, `docs`, `game`, `debug`, `test`. The [README](../README.md#tools) lists the tools in each.
+Tool groups for `--toolsets`: `core`, `files`, `scene`, `node`, `script`, `run`, `editor`, `signal`, `resource`, `visual`, `anim`, `world`, `audio`, `project`, `import`, `export`, `code`, `docs`, `game`, `debug`, `test`. [tools.md](tools.md#tools-by-group) lists the tools in each.
 
 Example: compact mode, read-only, with a fixed Godot:
 

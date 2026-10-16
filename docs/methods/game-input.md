@@ -1,4 +1,4 @@
-# Methods: input, timing and input recording (step 3)
+# Methods: input, timing and input recording
 
 Tools that drive the **running game**: send input, pause/step/slow it down, wait for things
 to happen, and record/replay input. They work on games started with `godot_run_start`
