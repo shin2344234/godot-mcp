@@ -32,6 +32,10 @@ Needs Godot 4.7 or newer (tested with 4.7.2).
   shader graphs, shader checks, Control layout.
 - **Animation, world and audio**: AnimationPlayer and AnimationTree, TileMapLayer,
   GridMap and TileSet, navigation baking and paths, audio bus layout.
+  `tileset.edit` covers one-way collision, navigation and occlusion layers/polygons,
+  per-tile values (custom data by name, modulate, z_index...), alternative tiles and tile
+  animation, and warns about keys an op ignores; `grid.edit` paints terrains by name over
+  a `rect`; `navigation.bake` takes `agent_radius`.
 - **Project, import and export**: project settings, input actions, autoloads, plugins,
   validation, import options, export presets and export runs. Export credentials
   are never read or written by the export tools.
