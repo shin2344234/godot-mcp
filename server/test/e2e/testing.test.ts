@@ -184,7 +184,7 @@ describe.skipIf(!enabled || !gutDir)('test.run: GUT', () => {
     const r = json(await call({}, { onprogress: (p) => progress.push(String(p.message)), timeout: 600_000 }));
     expect(r).toMatchObject({ framework: 'gut', version: '9.7.1', status: 'failed', exit_code: 1 });
     expect(r.totals).toMatchObject({ tests: 7, passed: 3, failed: 3, errors: 0, skipped: 1 });
-    expect(r.failures).toContainEqual({ test: 'test_fails', file: 'res://test/unit/test_math.gd', line: 7, message: '[1] expected to equal [2]:  one is not two' });
+    expect(r.failures).toContainEqual({ test: 'test_fails', file: 'res://test/unit/test_math.gd', line: 7, message: 'got [1], expected to equal [2]: one is not two' });
     expect(r.failures).toContainEqual({ test: 'test_inner_bad', class: 'TestInner', file: 'res://test/unit/test_math.gd', line: 17, message: 'inner broken' });
     // GUT reports "at line -1" for engine errors; the line comes from Godot's output instead.
     expect(r.failures).toContainEqual(expect.objectContaining({ test: 'test_runtime_error', file: 'res://test/test_errors.gd', line: 5 }));
