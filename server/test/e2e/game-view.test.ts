@@ -333,6 +333,8 @@ describe.skipIf(!enabled || !hasXvfb)('game view: windowed editor', () => {
     await new Promise((r) => setTimeout(r, 1000));
     const result = await call('godot_game_screenshot', { source: 'editor_2d' });
     const r = json(result);
+    // The editor opens this project on the 3D screen: the capture switches to 2D and back.
+    if (r.switched_main_screen) expect(r.restored_main_screen).toBe('3D');
     expect(r.source).toMatchObject({ viewport: 'editor 2D viewport' });
     expect(r.width).toBeGreaterThan(50);
     const png = decodePng(image(result).data);
@@ -345,7 +347,10 @@ describe.skipIf(!enabled || !hasXvfb)('game view: windowed editor', () => {
   it('switches to the 3D screen when asked for the 3D viewport', async () => {
     const result = await call('godot_game_screenshot', { source: 'editor_3d', max_size: 256 });
     const r = json(result);
-    expect(r.switched_main_screen).toBe('3D');
+    // The editor opens this project on the 3D screen, and the editor_2d screenshot before
+    // this test switched back to it after capturing, so no switch is needed here; whenever
+    // a switch does happen, the previous screen is restored.
+    if (r.switched_main_screen) expect(r.restored_main_screen).toBeDefined();
     expect(r.source.viewport).toBe('editor 3D viewport');
     expect(Math.max(r.width, r.height)).toBeLessThanOrEqual(256);
   }, 90_000);
@@ -357,6 +362,8 @@ describe.skipIf(!enabled || !hasXvfb)('game view: windowed editor', () => {
     const result = await call('godot_game_screenshot', { source: 'editor_3d', max_size: 128 });
     const r = json(result);
     expect(r.switched_main_screen).toBe('3D');
+    // The 2D dogfood log: the editor stayed on 3D afterwards. Now the Script screen is back.
+    expect(r.restored_main_screen).toBe('Script');
     expect(r.source.viewport).toBe('editor 3D viewport');
   }, 90_000);
 

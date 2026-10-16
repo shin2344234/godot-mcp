@@ -59,10 +59,19 @@ static func screenshot(params: Dictionary, env: Dictionary) -> Dictionary:
 	# A viewport inside a hidden main screen (or a hidden 3D split view) isn't drawn.
 	if not _on_screen(vp):
 		if bool(params.get("_retried", false)):
+			# Giving up: still put the user's screen back.
+			if not str(params.get("_restore", "")).is_empty():
+				ei.call("set_main_screen_editor", str(params["_restore"]))
 			return R.err(R.CONFLICT, ("The editor's %s viewport is still not visible after switching to the %s screen " +
 				"(for a 3D split view, pick a layout that shows it in View > Viewports).") % [screen, screen])
+		var previous: String = current_main_screen(ei)
 		ei.call("set_main_screen_editor", screen)
-		return R.ok({"retry_after_ms": RETRY_AFTER_MS, "switched_main_screen": screen})
+		var answer: Dictionary = {"retry_after_ms": RETRY_AFTER_MS, "switched_main_screen": screen}
+		# The server passes this back as "_restore" on its retries, so the screen the user
+		# was looking at comes back once the capture is done (see below).
+		if not previous.is_empty() and previous != screen:
+			answer["previous_main_screen"] = previous
+		return R.ok(answer)
 
 	var img: Image = vp.get_texture().get_image() if vp.get_texture() != null else null
 	if img == null or img.is_empty():
@@ -71,6 +80,14 @@ static func screenshot(params: Dictionary, env: Dictionary) -> Dictionary:
 	if vp.use_hdr_2d and RenderingServer.get_rendering_device() != null:
 		img.linear_to_srgb()
 	var out: Dictionary = View.process_image(img, params, "editor %s viewport" % screen)
+	# The image is in hand, so put back the main screen this call switched away from. The
+	# 2D dogfood test took an editor_3d screenshot of a 2D project and the editor stayed on
+	# the 3D screen afterwards: a screenshot should not change what the user is looking at.
+	var restore: String = str(params.get("_restore", ""))
+	if not restore.is_empty():
+		ei.call("set_main_screen_editor", restore)
+		if not R.is_err(out):
+			(out["result"] as Dictionary)["restored_main_screen"] = restore
 	if R.is_err(out):
 		return out
 	# A screenshot saved into the project should show up in the FileSystem dock.
@@ -79,6 +96,25 @@ static func screenshot(params: Dictionary, env: Dictionary) -> Dictionary:
 	if saved.begins_with("res://") and fs != null:
 		fs.call("update_file", saved)
 	return out
+
+
+## Name of the editor's current main screen ("2D", "3D", "Script", "Game", "AssetLib" or
+## a plugin's), or "" if it can't be told.
+##
+## EditorInterface can set the main screen (set_main_screen_editor) but has no getter. The
+## screen buttons in the editor's title bar are toggle Buttons named after the plugin, with
+## theme type variation "MainScreenButton", and exactly the selected one is pressed
+## (EditorMainScreen::add_main_plugin / select, editor/editor_main_screen.cpp, 4.7.2). They
+## are internal children, hence find_children(..., owned = false).
+static func current_main_screen(ei: Object) -> String:
+	var base: Control = ei.call("get_base_control")
+	if base == null:
+		return ""
+	for n: Node in base.find_children("*", "Button", true, false):
+		var b: Button = n
+		if b.theme_type_variation == &"MainScreenButton" and b.button_pressed:
+			return String(b.name)
+	return ""
 
 
 ## True if every Control above the viewport is visible (so the editor draws it).

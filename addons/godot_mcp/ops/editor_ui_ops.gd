@@ -220,6 +220,14 @@ static func _open_script(params: Variant, ei: Object) -> Dictionary:
 		if base is TextEdit:
 			var te: TextEdit = base
 			result["caret"] = {"line": te.get_caret_line() + 1, "column": te.get_caret_column() + 1}
+			# TextEdit.set_caret_column clamps to the line's length, so a column past the end
+			# of the line (or any column on an empty line) lands at the end of the line. The
+			# dogfood test saw "column: 5" echoed next to "caret.column: 1" on an empty line
+			# and read it as the column being ignored; say what happened instead.
+			if te.get_caret_line() == line - 1 and te.get_caret_column() + 1 < column:
+				var length: int = te.get_line(line - 1).length()
+				result["note"] = "Line %d has %d character%s, so the caret was placed at its end (column %d)." % [
+					line, length, "" if length == 1 else "s", te.get_caret_column() + 1]
 	return R.ok(result)
 
 

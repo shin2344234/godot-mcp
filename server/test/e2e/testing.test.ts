@@ -339,6 +339,13 @@ describe.skipIf(!enabled)('editor.ui', () => {
     const r = json(await ui({ action: 'open_script', script: 'main.gd', line: 5, column: 2 }));
     expect(r).toMatchObject({ script: 'res://main.gd', line: 5, column: 2, current_script: 'res://main.gd' });
     if (r.caret) expect(r.caret).toEqual({ line: 5, column: 2 });
+    // Line 3 of main.gd is empty: TextEdit clamps the column, and the reply says so.
+    const empty = json(await ui({ action: 'open_script', script: 'main.gd', line: 3, column: 5 }));
+    expect(empty.caret).toBeDefined();
+    if (empty.caret) {
+      expect(empty.caret).toEqual({ line: 3, column: 1 });
+      expect(empty.note).toMatch(/Line 3 has 0 characters, so the caret was placed at its end \(column 1\)/);
+    }
     expect(errorText(await ui({ action: 'open_script', script: 'res://main.gd', line: 99 }))).toMatch(/has \d+ lines; 'line' 99 is past the end/);
     expect(errorText(await ui({ action: 'open_script', script: 'res://mian.gd' }))).toMatch(/^NOT_FOUND: .*Did you mean: res:\/\/main\.gd/);
   }, 60_000);

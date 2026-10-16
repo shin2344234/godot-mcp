@@ -246,7 +246,11 @@ func _mutate(method: String, planner: Callable, params: Dictionary) -> Dictionar
 	# Editor edits live in memory until saved; say so, so the caller remembers scene.save.
 	result["saved"] = false
 	if not switched_note.is_empty():
-		result["switched_from"] = before.scene_file_path if is_instance_valid(before) else null
+		# null when the previous tab's root is gone (the editor freed it on the switch).
+		var from: Variant = null
+		if is_instance_valid(before):
+			from = before.scene_file_path
+		result["switched_from"] = from
 		result["note"] = (str(result["note"]) + " " + switched_note) if result.has("note") else switched_note
 	return R.ok(result)
 

@@ -107,6 +107,13 @@ Bridge method `editor.screenshot` (E), params
   frame after the switch), sending `_retried: true` on the last attempt so the addon then
   fails with `CONFLICT` instead of switching again. The tool result carries
   `switched_main_screen`.
+- The screen the user had open is put back right after the capture (and also when the call
+  gives up with `CONFLICT`), and the result says `restored_main_screen`. EditorInterface has
+  no getter for the current main screen, so the addon reads it from the title bar's screen
+  buttons: toggle `Button`s named after the plugin, theme type variation `MainScreenButton`,
+  only the selected one pressed (`EditorMainScreen::add_main_plugin` / `select`,
+  `editor/editor_main_screen.cpp`, 4.7.2). The retry answer carries `previous_main_screen`,
+  which the server sends back as `_restore`.
 - A headless editor (`--headless`) renders nothing: `UNSUPPORTED` with a hint to use a windowed
   editor or a windowed game. Without a connected editor: `EDITOR_NOT_CONNECTED`.
 - `node` is rejected with editor sources.
