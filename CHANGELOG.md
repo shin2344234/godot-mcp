@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-The first public release, planned as **0.1.0**. It covers the MCP server
+## [0.1.0] - 2026-10-16
+
+The first public release. It covers the MCP server
 (`@shin2344234/godot-mcp` on npm) and the Godot editor addon (`addons/godot_mcp`).
 Needs Godot 4.7 or newer (tested with 4.7.2).
 
@@ -96,6 +98,7 @@ Needs Godot 4.7 or newer (tested with 4.7.2).
   project config of Claude Code, Cursor, VS Code, Codex, Gemini CLI, Zed and more
   (Claude Desktop and Windsurf globally), and adds a short `AGENTS.md` block.
   `--dry-run` previews, `--remove` undoes.
-- **Docs**: per-client setup, troubleshooting, protocol and per-area method references.
+- **Docs**: a short README with install steps; under `docs/`, per-client setup, the full tool list, how it works, troubleshooting, protocol designs and per-area method references.
 
-[unreleased]: https://github.com/shin2344234/godot-mcp/commits/main
+[unreleased]: https://github.com/shin2344234/godot-mcp/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/shin2344234/godot-mcp/releases/tag/v0.1.0

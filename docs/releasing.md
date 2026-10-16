@@ -86,6 +86,9 @@ node scripts/check-versions.mjs --set 0.2.0
 git diff --stat   # expect exactly those 5 files
 ```
 
+In `CHANGELOG.md`, rename the `[Unreleased]` heading to `[0.2.0] - <today's date>`, add a
+new empty `[Unreleased]` section above it, and update the compare links at the bottom.
+
 Registry versions are immutable: a version can be published to the MCP Registry only once,
 and its metadata cannot be changed afterwards. If `server.json` needs a fix after a
 release, release a new patch version of everything.
@@ -178,11 +181,25 @@ curl "https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.shi
 The response lists the new version with `"isLatest": true` under
 `_meta["io.modelcontextprotocol.registry/official"]`.
 
-### 7. GitHub release (optional)
+### 7. GitHub release
+
+The README and [setup.md](setup.md) send Claude Desktop users to the release page for the
+`.mcpb` bundle, and the addon zip is there for people who install the addon by hand, so
+attach both:
 
 ```bash
-gh release create v0.2.0 --title "v0.2.0" --generate-notes
+node scripts/build-mcpb.mjs          # -> dist-bundles/godot-mcp-0.2.0.mcpb (also smoke-tests it)
+node scripts/build-addon-zip.mjs     # -> dist-addon/godot_mcp-0.2.0.zip
+# release notes = this version's CHANGELOG section
+awk '/^## \[0.2.0\]/{f=1;next} /^## \[|^\[[^]]+\]: /{f=0} f' CHANGELOG.md > release-notes.md
+gh release create v0.2.0 dist-bundles/godot-mcp-0.2.0.mcpb dist-addon/godot_mcp-0.2.0.zip \
+  --title "v0.2.0" --notes-file release-notes.md
+rm release-notes.md
 ```
+
+`gh release create <tag> <files...>` uploads the files as release assets. On Windows run
+these in Git Bash; in PowerShell, use `--generate-notes` instead of `--notes-file`, or paste
+the changelog section into the release on GitHub.
 
 ## Troubleshooting
 

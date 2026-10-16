@@ -1,6 +1,6 @@
 # Runtime protocol (server ⇄ running game)
 
-Step 3 adds tools that work on the **running game**: live scene tree, live edits,
+The `game_*`, `debug_*` and `test_*` tools work on the **running game**: live scene tree, live edits,
 input, timing, screenshots, performance, breakpoint debugging and tests. This file
 describes the channel they share. Everything here was checked against Godot 4.7.2
 (source tag `4.7.2-stable` and a real 4.7.2 binary).

@@ -1,4 +1,4 @@
-# Methods: scene extras, signals and batches (step 2)
+# Methods: scene extras, signals and batches
 
 Bridge-protocol methods added by `addons/godot_mcp/ops/scene_extra_ops.gd`,
 `addons/godot_mcp/ops/signal_ops.gd` and `addons/godot_mcp/core/scene_batch.gd`. Conventions

@@ -1,4 +1,4 @@
-# Methods: animation and audio (step 2)
+# Methods: animation and audio
 
 Bridge-protocol methods of the `anim` and `audio` groups, in the style of
 [bridge-protocol.md](../bridge-protocol.md) section 5. Values follow section 3

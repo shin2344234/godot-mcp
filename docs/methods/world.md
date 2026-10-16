@@ -1,4 +1,4 @@
-# World methods (step 2)
+# World methods
 
 TileMapLayer / GridMap cells, TileSet resources and navigation. GDScript side:
 `addons/godot_mcp/ops/world_ops.gd` (+ `core/world_nav.gd`, `core/world_tileset.gd`);

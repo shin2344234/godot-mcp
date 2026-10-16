@@ -1,6 +1,6 @@
 # Methods: resources, visual authoring, import settings
 
-Step 2 bridge-protocol methods implemented by `addons/godot_mcp/ops/resource_ops.gd`,
+Bridge-protocol methods implemented by `addons/godot_mcp/ops/resource_ops.gd`,
 `ops/visual_ops.gd` and `ops/import_ops.gd` (helpers: `core/resource_util.gd`,
 `core/visual_shader_ports.gd`, `core/res_save.gd`). Same conventions as section 5 of
 [bridge-protocol.md](../bridge-protocol.md): **(E/H)** = editor and headless. Values use the

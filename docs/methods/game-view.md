@@ -1,4 +1,4 @@
-# Methods: screenshots and performance (step 3)
+# Methods: screenshots and performance
 
 MCP tools `godot_game_screenshot` and `godot_game_perf` (`server/src/ops/gameView.ts`, group
 `game`). Game-side work is done by runtime methods in
