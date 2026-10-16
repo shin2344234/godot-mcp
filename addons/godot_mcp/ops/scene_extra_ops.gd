@@ -494,9 +494,12 @@ static func do_scene_close(params: Variant, env: Dictionary) -> Dictionary:
 		if serr != OK:
 			return R.godot_err("Saving '%s' before closing" % path, serr)
 		saved = true
+	# Closing makes another tab current; keep its unsaved state (EditorScenes.restore_unsaved).
+	var dirty_before: PackedStringArray = EditorScenes.unsaved_scenes(ei)
 	var err: int = ei.call(&"close_scene")
 	if err != OK:
 		return R.godot_err("Closing '%s'" % path, err)
+	EditorScenes.restore_unsaved(ei, dirty_before)
 	var now: Node = ei.call(&"get_edited_scene_root")
 	var closed: Variant = null
 	if not path.is_empty():

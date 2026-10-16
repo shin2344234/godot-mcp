@@ -212,7 +212,11 @@ func _open_scene(raw: String, param_name: String) -> Dictionary:
 		return R.value(path)
 	if not ResPaths.file_exists(path):
 		return ResPaths.scene_not_found(path)
+	# Switching tabs can make Godot forget that the target tab has unsaved changes (see
+	# EditorScenes.restore_unsaved), so remember which tabs were dirty before the switch.
+	var dirty_before: PackedStringArray = EditorScenes.unsaved_scenes(EditorInterface)
 	EditorInterface.open_scene_from_path(path)
+	EditorScenes.restore_unsaved(EditorInterface, dirty_before)
 	current = EditorInterface.get_edited_scene_root()
 	if current == null or current.scene_file_path != path:
 		return R.err(R.GODOT_ERROR, "The editor could not open '%s' (it may be broken or have missing dependencies). Check logs.read for the editor's error messages." % path)
@@ -220,10 +224,17 @@ func _open_scene(raw: String, param_name: String) -> Dictionary:
 
 
 func _mutate(method: String, planner: Callable, params: Dictionary) -> Dictionary:
+	var before: Node = EditorInterface.get_edited_scene_root()
 	var t: Dictionary = _edited_root(params)
 	if R.is_err(t):
 		return t
 	var root: Node = t["value"]
+	# In the editor, `scene` works by opening that scene's tab and making it the edited one
+	# (edits must go through that tab's undo history). It stays current afterwards, so later
+	# calls without `scene` hit it too: say so instead of switching silently.
+	var switched_note: String = ""
+	if before != null and before != root:
+		switched_note = "The editor switched from %s to this scene's tab; calls without 'scene' now edit it." % _scene_label(before)
 	var plan: Dictionary = planner.call(root, params)
 	if R.is_err(plan):
 		return plan
@@ -234,7 +245,16 @@ func _mutate(method: String, planner: Callable, params: Dictionary) -> Dictionar
 	result["scene"] = root.scene_file_path
 	# Editor edits live in memory until saved; say so, so the caller remembers scene.save.
 	result["saved"] = false
+	if not switched_note.is_empty():
+		result["switched_from"] = before.scene_file_path if is_instance_valid(before) else null
+		result["note"] = (str(result["note"]) + " " + switched_note) if result.has("note") else switched_note
 	return R.ok(result)
+
+
+static func _scene_label(root: Node) -> String:
+	if not is_instance_valid(root):
+		return "the previous scene"
+	return root.scene_file_path if not root.scene_file_path.is_empty() else "an unsaved scene"
 
 
 func _scene_open(params: Dictionary) -> Dictionary:

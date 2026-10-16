@@ -278,6 +278,28 @@ describe.skipIf(!enabled)('scene extras: editor', () => {
     expect(errorText(await call('godot_scene_close', { path: 'res://player.tscn' }))).toMatch(/NOT_FOUND: .*not open/);
   }, 120_000);
 
+  it('keeps a scene unsaved after saving a sub-scene it instances, and says when `scene` switched tabs', async () => {
+    json(await call('godot_scene_open', { path: 'res://main.tscn' }));
+    json(await call('godot_node_set', { path: 'Label', properties: { text: 'dirty' } }));
+    const other = json(await call('godot_node_set', { scene: 'res://player.tscn', path: 'Sprite2D', properties: { visible: false } }));
+    expect(other).toMatchObject({ scene: 'res://player.tscn', switched_from: 'res://main.tscn' });
+    expect(other.note).toMatch(/switched from res:\/\/main\.tscn/);
+    // Saving player.tscn makes Godot reload its instances in main.tscn when that tab becomes
+    // current again, and the reload used to clear main's unsaved state (Godot 4.7.2 bug).
+    json(await call('godot_scene_close', { save: true }));
+    let status = json(await call('godot_status', {}));
+    expect(status.editor.edited_scene).toBe('res://main.tscn');
+    expect(status.editor.unsaved_scenes).toContain('res://main.tscn');
+    // Same through a plain switch back (scene.open) after scene.save.
+    json(await call('godot_node_set', { scene: 'res://player.tscn', path: 'Sprite2D', properties: { visible: true } }));
+    json(await call('godot_scene_save', {}));
+    json(await call('godot_scene_open', { path: 'res://main.tscn' }));
+    status = json(await call('godot_status', {}));
+    expect(status.editor.unsaved_scenes).toContain('res://main.tscn');
+    json(await call('godot_scene_close', { path: 'res://player.tscn' }));
+    json(await call('godot_scene_close', { path: 'res://main.tscn', discard: true }));
+  }, 120_000);
+
   it('scene.save_as retargets the tab in godot_status; scene.close then reports discarded changes', async () => {
     json(await call('godot_scene_open', { path: 'res://main.tscn' }));
     json(await call('godot_scene_save_as', { path: 'res://levels/main_alt.tscn' }));
