@@ -60,6 +60,8 @@ describe('godot_addon_install', () => {
     const dir = tempProject();
     const missing = (await status.run({}, ctxFor(dir))).data as Record<string, unknown>;
     expect(missing.addon_hint).toMatch(/godot_addon_install/);
+    // Says that scene tools then work without the editor (MCP_TEST_LOG Phase A: had to guess).
+    expect(missing.addon_hint).toMatch(/work headless .* without the editor/);
     await addonInstall.run({}, ctxFor(dir));
     const cfg = path.join(dir, 'addons', 'godot_mcp', 'plugin.cfg');
     writeFileSync(cfg, readFileSync(cfg, 'utf8').replace(/version="[^"]+"/, 'version="0.0.1"'));

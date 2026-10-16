@@ -272,14 +272,19 @@ static func set_preset(params: Dictionary, env: Dictionary) -> Dictionary:
 		if key in CREDENTIAL_OPTIONS or key == "script_encryption_key":
 			return R.err(R.BAD_PARAMS, ("export.preset_set: '%s' is a credential. Godot 4.7 keeps credentials in .godot/export_credentials.cfg, which this server never reads or writes. " +
 				"Set it in the editor (Project > Export), or via Godot's environment variables for CI (e.g. GODOT_ANDROID_KEYSTORE_RELEASE_PATH/_USER/_PASSWORD).") % label)
-		if is_secret(key) and not allow_secrets:
-			return R.err(R.BAD_PARAMS, "export.preset_set: '%s' looks like a secret (signing, password or remote-deploy setting) and export_presets.cfg is usually committed to version control. Pass \"allow_secrets\": true to write it anyway; the value is never shown back." % label)
+		var secret_err: String = ("export.preset_set: '%s' looks like a secret (signing, password or remote-deploy setting) and export_presets.cfg is usually committed to version control. " +
+			"Pass \"allow_secrets\": true to write it anyway; the value is never shown back.") % label
 		if not is_option:
+			if is_secret(key) and not allow_secrets:
+				return R.err(R.BAD_PARAMS, secret_err)
 			var field_err: Dictionary = _set_field(cfg, entry, key, value)
 			if R.is_err(field_err):
 				return field_err
 			changed[label] = redact(key, value)
 			continue
+		# Unknown option first, secret second: the secret check matches substrings ("key",
+		# "pass", ...), so a typo or made-up name like "bogus_key" used to be refused as a
+		# secret, hiding the real problem and its did-you-mean (MCP_TEST_LOG Phase A).
 		var exists: bool = cfg.has_section_key(opt_section, key)
 		if not exists and not allow_new_keys:
 			var existing: PackedStringArray = cfg.get_section_keys(opt_section) if cfg.has_section(opt_section) else PackedStringArray()
@@ -288,6 +293,8 @@ static func set_preset(params: Dictionary, env: Dictionary) -> Dictionary:
 				return R.err(R.NOT_FOUND, ("export.preset_set: preset '%s' has no option '%s'.%s Godot writes every option of the platform to the file, so this is probably a typo. " +
 					"Pass \"allow_new_keys\": true to add it anyway (e.g. for a hand-written preset); use export.presets {\"preset\": \"%s\"} to list options.") %
 					[entry["name"], key, Fuzzy.did_you_mean(similar), entry["name"]], {"similar": similar})
+		if is_secret(key) and not allow_secrets:
+			return R.err(R.BAD_PARAMS, secret_err)
 		var decoded: Dictionary = _decode_like(key, value, cfg.get_value(opt_section, key) if exists else null)
 		if R.is_err(decoded):
 			return decoded

@@ -100,6 +100,41 @@ describe.skipIf(!enabled)('project tools (headless)', () => {
     expect(projectGodot(proj.dir)).not.toContain('fire=');
   }, 120_000);
 
+  it('input.edit binds and describes every key name the same way (MCP_TEST_LOG Phase A)', async () => {
+    // "Up" used to read "key: Up" next to "key: W - Physical" (Godot's as_text() drops
+    // the suffix for non-printable keys), which looked like a keycode binding.
+    const res = json(
+      await call('godot_input_edit', {
+        ops: [
+          { op: 'add_action', action: 'walk_up', event: 'Up' },
+          { op: 'add_event', action: 'walk_up', event: 'W' },
+          { op: 'add_event', action: 'walk_up', event: { key: 'Escape', physical: false } },
+        ],
+      }),
+    );
+    expect(res.actions.walk_up.events).toEqual(['key: Up - Physical', 'key: W - Physical', 'key: Escape']);
+    json(await call('godot_input_edit', { ops: [{ op: 'remove_action', action: 'walk_up' }] }));
+  }, 120_000);
+
+  it('files.move of a class_name script refreshes the global class cache (MCP_TEST_LOG Phase A)', async () => {
+    const write = json(await call('godot_files_write', { path: 'res://tools/patcher.gd', content: 'class_name MovedPatcher\nextends Node\n' }));
+    expect(write.validation.valid).toBe(true);
+    json(await call('godot_files_move', { from: 'res://tools/patcher.gd', to: 'res://scripts_moved/patcher.gd' }));
+    // Before the fix the cache still mapped MovedPatcher to the old path, so this reported
+    // 'Class "MovedPatcher" hides a global script class.'
+    const v = json(await call('godot_script_validate', { path: 'res://scripts_moved/patcher.gd' }));
+    expect(v.errors).toEqual([]);
+    expect(v.valid).toBe(true);
+    expect(readFileSync(path.join(proj.dir, '.godot', 'global_script_class_cache.cfg'), 'utf8')).toContain('res://scripts_moved/patcher.gd');
+  }, 180_000);
+
+  it('files.write reports type errors, the same check as script.validate', async () => {
+    const w = json(await call('godot_files_write', { path: 'res://typed_bad.gd', content: 'extends Node\nvar x: int = "hello"\n' }));
+    expect(w.validation.valid).toBe(false);
+    expect(w.validation.errors[0].message).toMatch(/Cannot assign a value of type "?String"?/);
+    json(await call('godot_files_delete', { path: 'res://typed_bad.gd' }));
+  }, 120_000);
+
   it('input.edit warns when editing built-in ui_* actions and resets them on remove', async () => {
     const res = json(await call('godot_input_edit', { ops: [{ op: 'add_event', action: 'ui_accept', event: 'E' }] }));
     expect(res.warnings.join(' ')).toMatch(/built-in/);
@@ -184,6 +219,19 @@ describe.skipIf(!enabled)('project tools (headless)', () => {
     expect(clean.counts.error).toBe(0);
     expect(clean.checked.scenes).toBeGreaterThanOrEqual(2);
     expect(clean.checked.scripts).toBeGreaterThan(3);
+
+    // Vendored addons are skipped unless asked for (MCP_TEST_LOG Phase A: GUT's orphan .uid).
+    mkdirSync(path.join(proj.dir, 'addons', 'vendor'), { recursive: true });
+    writeFileSync(path.join(proj.dir, 'addons', 'vendor', 'gone.gd.uid'), 'uid://bvendororphan1\n');
+    const quiet = json(await call('godot_project_validate', { scope: 'uids' }));
+    expect(quiet.counts.by_kind.orphan_uid).toBeUndefined();
+    expect(quiet.checked.addons_skipped).toBeGreaterThan(0);
+    const loud = json(await call('godot_project_validate', { scope: 'uids', addons: true }));
+    expect(loud.issues.map((i: { path: string }) => i.path)).toContain('res://addons/vendor/gone.gd.uid');
+    expect(loud.checked.addons_skipped).toBeUndefined();
+    const inside = json(await call('godot_project_validate', { scope: 'uids', path_prefix: 'res://addons/vendor' }));
+    expect(inside.counts.by_kind.orphan_uid).toBe(1);
+    rmSync(path.join(proj.dir, 'addons', 'vendor'), { recursive: true });
 
     mkdirSync(path.join(proj.dir, 'broken'), { recursive: true });
     writeFileSync(

@@ -13,6 +13,10 @@ extends RefCounted
 ##   {"type": "joy_axis", "axis": "left_x", "value": -1} direction is the sign of value
 ##   "Space"                                             shorthand for a physical key
 ##
+## Every key spec, string shorthand or object, binds the physical key unless it says
+## "physical": false; results describe physical bindings as "key: <name> - Physical" for
+## all keys (Godot's own as_text() leaves the suffix off non-printable keys such as Up).
+##
 ## Defaults follow the editor's "Add Event" dialog (InputEventConfigurationDialog in 4.7):
 ## key events use the physical keycode and every event applies to all devices (-1).
 
@@ -214,6 +218,14 @@ static func describe_event(ev: Variant) -> String:
 	else:
 		type = (ev as InputEvent).get_class()
 	var text: String = (ev as InputEvent).as_text()
+	if ev is InputEventKey:
+		var k := ev as InputEventKey
+		# InputEventKey.as_text() adds " - Physical" only to printable keys: a physical
+		# Up/Left/Escape/F1 reads "Up", exactly like a keycode binding (verified on 4.7.2),
+		# so "Up" next to "W - Physical" looked like a different kind of binding
+		# (MCP_TEST_LOG Phase A). Say it for every physical key; keycode bindings stay bare.
+		if k.keycode == KEY_NONE and k.physical_keycode != KEY_NONE:
+			text = k.as_text_physical_keycode() + " - Physical"
 	var dev: int = (ev as InputEvent).device
 	if dev != ALL_DEVICES:
 		text += " (device %d)" % dev
