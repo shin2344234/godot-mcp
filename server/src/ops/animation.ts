@@ -1,9 +1,10 @@
 /**
- * Animation operations: AnimationPlayer libraries/tracks/keys and
- * AnimationTree graphs (state machines, blend spaces, blend trees).
+ * Animation operations: AnimationPlayer libraries/tracks/keys, AnimationTree
+ * graphs (state machines, blend spaces, blend trees) and SpriteFrames (the
+ * flip-book animations of AnimatedSprite2D/3D).
  *
- * All the work happens in GDScript (addons/godot_mcp/ops/anim_ops.gd and
- * core/anim_tree_ops.gd). Edits are `ops` arrays applied in order and
+ * All the work happens in GDScript (addons/godot_mcp/ops/anim_ops.gd,
+ * core/anim_tree_ops.gd and core/sprite_frames_ops.gd). Edits are `ops` arrays applied in order and
  * committed as ONE undo step in the editor; headless they are saved into the
  * .tscn (animations are embedded sub-resources of the scene).
  *
@@ -142,5 +143,56 @@ export const animTree = defineOp({
   run: (args, ctx) => forwardOp(ctx, 'anim.tree', args, { needsScene: true }),
 });
 
+/**
+ * SpriteFrames: one tool, three bridge methods. `path` (a .tres) goes to
+ * anim.frames_file (a file resource, saved at once); otherwise the node's
+ * SpriteFrames is read (no ops: anim.frames_read) or edited as one undoable
+ * scene mutation (anim.frames), which creates the SpriteFrames if missing.
+ * The schema stays flat: the ops share one object, as in anim.edit.
+ */
+export const animFrames = defineOp({
+  name: 'anim.frames',
+  group: 'anim',
+  title: 'Edit SpriteFrames',
+  description:
+    'Godot animation: read or edit the SpriteFrames of an AnimatedSprite2D/3D (or a .tres): add/rename/remove animations, speed/loop, frames cut from a sprite sheet. No ops = summary.',
+  input: z.object({
+    scene,
+    node: z.string().optional().describe('AnimatedSprite2D/3D; optional if the scene has one.'),
+    path: z.string().optional().describe('SpriteFrames .tres instead of a node.'),
+    ops: z
+      .array(
+        z.object({
+          op: z.enum(['add', 'remove', 'rename', 'set', 'add_frames', 'clear']),
+          animation: z.string(),
+          to: z.string().optional(),
+          speed: z.number().optional().describe('FPS.'),
+          loop: z.boolean().optional(),
+          texture: z.union([z.string(), z.array(z.string())]).optional().describe('Sheet to cut, or whole texture(s). add takes frames too.'),
+          hframes: z.number().optional(),
+          vframes: z.number().optional(),
+          frame_size: z.array(z.number()).optional().describe('[w, h] instead of h/vframes.'),
+          cells: z.array(z.unknown()).optional().describe('Row-major indices or [col, row].'),
+          start: z.number().optional(),
+          count: z.number().optional(),
+          duration: z.number().optional().describe('Relative frame length (1).'),
+        }),
+      )
+      .optional(),
+  }),
+  readOnly: false,
+  destructive: false,
+  run: (args, ctx) => {
+    if (args.path) {
+      if (args.node) throw new OpError('BAD_PARAMS', 'Pass either "path" (a SpriteFrames .tres) or "node" (an AnimatedSprite2D/3D in a scene), not both.');
+      const { scene: _scene, node: _node, ...rest } = args;
+      return forwardOp(ctx, 'anim.frames_file', rest);
+    }
+    const { path: _path, ops, ...rest } = args;
+    if (!ops || ops.length === 0) return forwardOp(ctx, 'anim.frames_read', rest, { needsScene: true });
+    return forwardOp(ctx, 'anim.frames', { ...rest, ops }, { needsScene: true });
+  },
+});
+
 /** Operations in this area, in the order they should appear in tools/list. */
-export const operations = [animRead, animEdit, animTreeRead, animTree];
+export const operations = [animRead, animEdit, animTreeRead, animTree, animFrames];

@@ -92,7 +92,7 @@ GODOT=/path/to/godot scripts/test-gdscript.sh
 
 ### The token budget test
 
-`server/test/unit/budget.test.ts` keeps the tool definitions small, because clients send them to the model on every turn. It estimates tokens as characters / 4 over each tool's name, title, description and input schema. Current numbers: about 15k tokens for the 89 operations in full mode (limit 17k) and 2.2k for the 14 core tools in compact mode (limit 5k). It also requires every description to start with "Godot " (clients with tool search match on it) and the server instructions to stay under 2 KB.
+`server/test/unit/budget.test.ts` keeps the tool definitions small, because clients send them to the model on every turn. It estimates tokens as characters / 4 over each tool's name, title, description and input schema. Current numbers: about 15.3k tokens for the 90 operations in full mode (limit 17k) and 2.2k for the 14 core tools in compact mode (limit 5k). It also requires every description to start with "Godot " (clients with tool search match on it) and the server instructions to stay under 2 KB.
 
 If your change trips it, shorten descriptions and schema text first. Raise a limit only with a good reason, and explain it in the test.
 

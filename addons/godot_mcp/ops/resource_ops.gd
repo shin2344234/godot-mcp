@@ -21,6 +21,7 @@ const ResPaths := preload("../core/res_paths.gd")
 const Fuzzy := preload("../core/fuzzy.gd")
 const ChangeSet := preload("../core/change_set.gd")
 const RU := preload("../core/resource_util.gd")
+const Frames := preload("../core/sprite_frames_ops.gd")
 
 ## File extensions scanned for `dependents` (anything ResourceLoader can list deps for).
 const DEPENDENT_EXTS: PackedStringArray = ["tscn", "scn", "tres", "res", "material"]
@@ -28,6 +29,11 @@ const DEPENDENT_EXTS: PackedStringArray = ["tscn", "scn", "tres", "res", "materi
 const TEXT_REF_EXTS: PackedStringArray = ["gd", "gdshader", "gdshaderinc", "cs", "cfg", "godot"]
 ## Maximum characters of a Shader's `code` returned by resource.read.
 const MAX_CODE_CHARS: int = 20000
+## Approximate JSON size (characters, ~4 per token) resource.read lets `properties` and
+## `theme_items` grow to before shortening them (see RU.fit). ~2.5k tokens.
+const READ_BUDGET: int = 10000
+## Nodes listed when resource.read is pointed at a scene file.
+const MAX_SCENE_NODES: int = 100
 
 
 static func methods() -> Dictionary:
@@ -70,6 +76,11 @@ static func read(params: Variant, _env: Dictionary) -> Dictionary:
 		out["script"] = script.resource_path
 		if not String(script.get_global_name()).is_empty():
 			out["script_class"] = String(script.get_global_name())
+	if res is PackedScene:
+		# The stored form of a scene is the `_bundled` dictionary (name/type indices, a flat
+		# variants list...), unreadable and ~1k tokens for a small scene (MCP_TEST_LOG). The
+		# SceneState gives a readable node list without instantiating anything.
+		return R.ok(_scene_overview(path, res as PackedScene, out))
 	if not picks.is_empty():
 		var chosen: Dictionary = {}
 		for item: Variant in picks:
@@ -79,12 +90,22 @@ static func read(params: Variant, _env: Dictionary) -> Dictionary:
 			if not theme_item and Codec.find_property(res, first).is_empty():
 				return RU.unknown_property(res, first, "%s '%s'" % [res.get_class(), path])
 			chosen[key] = RU.encode_value(res.get_indexed(NodePath(key)), depth)
-		out["properties"] = chosen
+		_capped(out, "properties", chosen)
 		return R.ok(out)
 	var props: Dictionary = RU.non_default_properties(res, depth, res is Theme)
-	if props.has("code") and props["code"] is String and (props["code"] as String).length() > MAX_CODE_CHARS:
-		props["code"] = (props["code"] as String).left(MAX_CODE_CHARS) + "\n…(truncated; use files.read for the full file)"
-	out["properties"] = props
+	if res is SpriteFrames:
+		# The raw `animations` array (nested dictionaries of embedded AtlasTextures) is long
+		# and hard to read; the anim.frames summary says the same compactly (atlas + regions).
+		props["animations"] = Frames.summary(res as SpriteFrames)
+		out["edit_with"] = "godot_anim_frames"
+	# The Shader code has its own, larger limit; keep it out of the generic size cap.
+	var code: Variant = props.get("code")
+	props.erase("code")
+	if code is String and (code as String).length() > MAX_CODE_CHARS:
+		code = (code as String).left(MAX_CODE_CHARS) + "\n…(truncated; use files.read for the full file)"
+	_capped(out, "properties", props)
+	if code != null:
+		(out["properties"] as Dictionary)["code"] = code
 	if res is Shader:
 		var uniforms: Array = []
 		for u: Dictionary in (res as Shader).get_shader_uniform_list():
@@ -94,8 +115,59 @@ static func read(params: Variant, _env: Dictionary) -> Dictionary:
 			uniforms.append(entry)
 		out["uniforms"] = uniforms
 	if res is Theme:
-		out["theme_items"] = RU.theme_items(res as Theme, depth)
+		_capped(out, "theme_items", RU.theme_items(res as Theme, depth))
 	return R.ok(out)
+
+
+## Applies the planned values, reads them back and undoes them again (each plan's "undo"
+## step, last plan first). Returns the keys that read back as null although a non-null
+## value was set. The resource ends up exactly as before.
+static func _rehearse(res: Resource, plans: Array[Dictionary]) -> Array[String]:
+	var lost: Array[String] = []
+	for plan: Dictionary in plans:
+		res.set_indexed(NodePath(str(plan["key"])), plan["value"])
+	for plan: Dictionary in plans:
+		if plan["value"] != null and res.get_indexed(NodePath(str(plan["key"]))) == null:
+			lost.append(str(plan["key"]))
+	for i: int in range(plans.size() - 1, -1, -1):
+		var undo: Array = plans[i]["undo"]
+		var args: Array = (undo[1] as Array).duplicate()
+		if str(undo[0]) == "set_indexed":
+			args[0] = NodePath(str(args[0]))
+		res.callv(StringName(str(undo[0])), args)
+	return lost
+
+
+## out[key] = value, shrunk to READ_BUDGET characters (core/resource_util.gd fit()); when
+## something was left out, out["truncated"] says how to get at it.
+static func _capped(out: Dictionary, key: String, value: Dictionary) -> void:
+	var fitted: Variant = RU.fit(value, READ_BUDGET)
+	out[key] = fitted
+	if JSON.stringify(fitted).length() < JSON.stringify(value).length():
+		out["truncated"] = ("'%s' was shortened to about %d tokens (keys under \"…\" and \"…(+N more)\" were left out). " +
+			"Read single values with properties: [\"name\"] (nested: \"name:sub\") or a smaller depth.") % [key, floori(READ_BUDGET / 4.0)]
+
+
+## resource.read on a .tscn/.scn: a short node list instead of the packed `_bundled` data.
+static func _scene_overview(path: String, scene: PackedScene, out: Dictionary) -> Dictionary:
+	var state: SceneState = scene.get_state()
+	var nodes: Array = []
+	var count: int = state.get_node_count()
+	for i: int in range(mini(count, MAX_SCENE_NODES)):
+		var entry: Dictionary = {"path": String(state.get_node_path(i)).trim_prefix("./")}
+		var type: String = String(state.get_node_type(i))
+		if not type.is_empty():
+			entry["type"] = type
+		var inst: PackedScene = state.get_node_instance(i)
+		if inst != null:
+			entry["instance"] = inst.resource_path
+		nodes.append(entry)
+	out["node_count"] = count
+	out["nodes"] = nodes
+	if count > nodes.size():
+		out["nodes_truncated"] = true
+	out["note"] = "A scene file: use scene.tree / node.get with scene: \"%s\" for node properties, and node.set to change them." % path
+	return out
 
 
 # ---------------------------------------------------------------------------------------
@@ -176,6 +248,15 @@ static func create(params: Variant, env: Dictionary) -> Dictionary:
 		if uid.is_empty():
 			uid = RU.assign_uid(path)
 	var out: Dictionary = {"path": path, "type": res.get_class(), "uid": RU.or_null(uid), "properties_set": applied}
+	# A project class_name script extending Resource: get_class() is only the native base
+	# ("Resource"), which read as if the script had been ignored (MCP_TEST_LOG). Report the
+	# script class as the type, and the native base and script path next to it.
+	var script: Script = res.get_script() as Script
+	if script != null:
+		out["script"] = script.resource_path
+		out["base_type"] = res.get_class()
+		if not String(script.get_global_name()).is_empty():
+			out["type"] = String(script.get_global_name())
 	if existed:
 		out["overwritten"] = true
 	return R.ok(out)
@@ -214,6 +295,14 @@ static func set_properties(params: Variant, env: Dictionary) -> Dictionary:
 		if R.is_err(plan):
 			return plan
 		plans.append(plan)
+	# A key can pass validation and still not exist: Godot classes answer set() for some
+	# names they do not store (TileSet's inspector array headers "navigation_layers" were
+	# once accepted and reported changed: null, MCP_TEST_LOG). Try the values first and
+	# refuse any that read back as null although a value was given.
+	var lost: Array[String] = _rehearse(res, plans)
+	if not lost.is_empty():
+		return R.err(R.NOT_FOUND, "resource.set: %s does not keep %s (the value reads back as null, so nothing would change). Use resource.read to see its real properties%s." %
+			[label, ", ".join(lost.map(func(k: String) -> String: return "'%s'" % k)), "; TileSet layers are added with godot_tileset_edit" if res is TileSet else ""], {"keys": lost})
 
 	var editor: bool = bool(env.get("editor", false))
 	if editor and env.get("undo_redo") != null:

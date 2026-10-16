@@ -169,6 +169,91 @@ describe.skipIf(!GODOT_BIN)('animation (headless)', () => {
     const nested = errorText(await call('godot_anim_tree', { scene: SCENE, nested: 'move', ops: [{ op: 'set', properties: { snap: 0.5 } }] }));
     expect(nested).toMatch(/Did you mean: Move/);
   }, 120_000);
+
+  // icon.svg imports as a 32x32 texture, so a 2x2 grid gives 16x16 cells.
+  it('cuts a sprite sheet into SpriteFrames on a new AnimatedSprite2D and saves it', async () => {
+    json(await call('godot_node_add', { scene: SCENE, parent: '.', type: 'AnimatedSprite2D', name: 'Hero' }));
+    const res = json(
+      await call('godot_anim_frames', {
+        scene: SCENE,
+        node: 'Hero',
+        ops: [
+          { op: 'add', animation: 'walk', texture: 'res://icon.svg', hframes: 2, vframes: 2, speed: 8 },
+          { op: 'add_frames', animation: 'walk', texture: 'res://icon.svg', hframes: 2, vframes: 2, cells: [[1, 1]], duration: 2 },
+          { op: 'add', animation: 'idle', texture: 'res://icon.svg', frame_size: [16, 16], start: 1, count: 2, loop: false },
+        ],
+      }),
+    );
+    expect(res.saved).toBe(true);
+    // A brand-new SpriteFrames starts with an empty "default"; it is dropped once real
+    // animations exist, and the node's animation follows to a real one.
+    expect(res.created_frames).toBe(true);
+    expect(res.note).toMatch(/default/);
+    expect(res.animation).toBe('walk');
+    expect(res.results[0]).toMatchObject({ op: 'add', added: 4, cell_size: [16, 16] });
+    const walk = res.animations.find((a: any) => a.name === 'walk');
+    expect(walk).toMatchObject({ atlas: 'res://icon.svg', frame_count: 5, speed: 8, loop: true });
+    expect(walk.regions[4]).toEqual([16, 16, 16, 16]);
+    expect(walk.durations).toEqual([1, 1, 1, 1, 2]);
+    const idle = res.animations.find((a: any) => a.name === 'idle');
+    expect(idle).toMatchObject({ frame_count: 2, loop: false, regions: [[16, 0, 16, 16], [0, 16, 16, 16]] });
+    expect(res.animations.map((a: any) => a.name)).not.toContain('default');
+    const text = sceneText();
+    expect(text).toContain('[sub_resource type="SpriteFrames"');
+    expect(text).toContain('Rect2(16, 16, 16, 16)');
+
+    // No ops = the compact summary.
+    const read = json(await call('godot_anim_frames', { scene: SCENE, node: 'Hero' }));
+    expect(read.animations.map((a: any) => a.name).sort()).toEqual(['idle', 'walk']);
+
+    // Renaming the current/autoplay animation carries the node's references along.
+    json(await call('godot_node_set', { scene: SCENE, path: 'Hero', properties: { autoplay: 'walk' } }));
+    const renamed = json(
+      await call('godot_anim_frames', { scene: SCENE, node: 'Hero', ops: [{ op: 'rename', animation: 'walk', to: 'run' }, { op: 'set', animation: 'run', speed: 12 }] }),
+    );
+    expect(renamed).toMatchObject({ animation: 'run', autoplay: 'run' });
+    expect(renamed.animations.find((a: any) => a.name === 'run').speed).toBe(12);
+  }, 120_000);
+
+  it('edits a SpriteFrames .tres, and resource.read shows its frames', async () => {
+    json(await call('godot_resource_create', { path: 'res://anim/hero_frames.tres', type: 'SpriteFrames' }));
+    const res = json(
+      await call('godot_anim_frames', {
+        path: 'res://anim/hero_frames.tres',
+        ops: [
+          { op: 'rename', animation: 'default', to: 'idle' },
+          { op: 'add_frames', animation: 'idle', texture: ['res://icon.svg', 'res://icon.svg'] },
+        ],
+      }),
+    );
+    expect(res.saved).toBe(true);
+    expect(res.animations[0]).toMatchObject({ name: 'idle', frame_count: 2, frames: ['res://icon.svg', 'res://icon.svg'] });
+
+    // resource.read used to show only "animations": [{...}] with embedded atlases hidden.
+    const read = json(await call('godot_resource_read', { path: 'res://anim/hero_frames.tres' }));
+    expect(read.edit_with).toBe('godot_anim_frames');
+    expect(read.properties.animations[0]).toMatchObject({ name: 'idle', frame_count: 2 });
+  }, 120_000);
+
+  it('rejects bad SpriteFrames edits with actionable messages', async () => {
+    const before = sceneText();
+    const notSprite = errorText(await call('godot_anim_frames', { scene: SCENE, node: 'Sprite2D', ops: [{ op: 'add', animation: 'a' }] }));
+    expect(notSprite).toMatch(/not an AnimatedSprite2D/);
+    expect(notSprite).toMatch(/Hero/);
+    const missing = errorText(await call('godot_anim_frames', { scene: SCENE, node: 'Hero', ops: [{ op: 'rename', animation: 'rn', to: 'x' }] }));
+    expect(missing).toMatch(/ops\[0\] \(rename\): no animation 'rn'/);
+    const later = errorText(
+      await call('godot_anim_frames', {
+        scene: SCENE,
+        node: 'Hero',
+        ops: [{ op: 'add', animation: 'ok' }, { op: 'add_frames', animation: 'ok', texture: 'res://icon.svg', hframes: 2, cells: [7] }],
+      }),
+    );
+    expect(later).toMatch(/ops\[1\] \(add_frames\)/);
+    expect(sceneText()).toBe(before);
+    const both = errorText(await call('godot_anim_frames', { scene: SCENE, node: 'Hero', path: 'res://anim/hero_frames.tres' }));
+    expect(both).toMatch(/node|path/);
+  }, 120_000);
 });
 
 describe.skipIf(!GODOT_BIN)('animation (editor)', () => {
@@ -234,5 +319,18 @@ describe.skipIf(!GODOT_BIN)('animation (editor)', () => {
     expect(read.root.transitions.find((t: any) => t.to === 'Walk').advance_expression).toBe('velocity.length() > 0.1');
     json(await call('godot_scene_save', {}));
     expect(readFileSync(path.join(proj.dir, 'anim', 'anim_demo.tscn'), 'utf8')).toContain('velocity.length() > 0.1');
+  }, 180_000);
+
+  it('builds SpriteFrames in the live editor', async () => {
+    json(await call('godot_node_add', { parent: '.', type: 'AnimatedSprite2D', name: 'Hero' }));
+    const res = json(
+      await call('godot_anim_frames', { node: 'Hero', ops: [{ op: 'add', animation: 'walk', texture: 'res://icon.svg', hframes: 2, vframes: 2 }] }),
+    );
+    expect(res.backend).toBe('editor');
+    expect(res.animations).toEqual([expect.objectContaining({ name: 'walk', frame_count: 4 })]);
+    const read = json(await call('godot_anim_frames', { node: 'Hero' }));
+    expect(read.animation).toBe('walk');
+    json(await call('godot_scene_save', {}));
+    expect(readFileSync(path.join(proj.dir, 'anim', 'anim_demo.tscn'), 'utf8')).toContain('[sub_resource type="AtlasTexture"');
   }, 180_000);
 });

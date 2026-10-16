@@ -118,6 +118,33 @@ describe.skipIf(!enabled)('visual (headless)', () => {
     expect(missing).toMatch(/create: true/);
   }, 120_000);
 
+  it('wires one component of a vector output and takes enum values by name', async () => {
+    // MCP_TEST_LOG: Texture alpha could not be wired (the node has one vec4 output; the graph
+    // editor's expand arrow exposes r/g/b/a), and enum properties took only numbers.
+    const r = json(
+      await call('godot_visual_shader_graph', {
+        path: 'res://shaders/alpha.tres',
+        create: true,
+        mode: 'canvas_item',
+        ops: [
+          { op: 'add_node', type: 'Texture', id: 2, properties: { source: 'SOURCE_2D_TEXTURE' } },
+          { op: 'connect', from: 2, from_port: 'color.a', to: 0, to_port: 'alpha' },
+          { op: 'add_node', type: 'Mix', id: 3, properties: { op_type: 'Vector3Scalar' } },
+        ],
+      }),
+    );
+    expect(r.results[0]).toMatchObject({ properties: { source: 2 }, enum_names: { source: 'SOURCE_2D_TEXTURE' } });
+    expect(r.results[1]).toMatchObject({ from_port: 4, from_port_spec: 'color.a', to_port: 1 });
+    expect(r.results[2].enum_names).toEqual({ op_type: 'OP_TYPE_VECTOR_3D_SCALAR' });
+    const g = json(await call('godot_visual_shader_graph_read', { path: 'res://shaders/alpha.tres' }));
+    expect(g.types.fragment.nodes.find((n: { id: number }) => n.id === 2).expanded_ports).toEqual([0]);
+    expect(json(await call('godot_visual_shader_check', { path: 'res://shaders/alpha.tres' })).valid).toBe(true);
+    const bad = errorText(
+      await call('godot_visual_shader_graph', { path: 'res://shaders/alpha.tres', ops: [{ op: 'set', id: 3, properties: { op_type: 'Vector9' } }] }),
+    );
+    expect(bad).toMatch(/Vector3Scalar = 4 \(OP_TYPE_VECTOR_3D_SCALAR\)/);
+  }, 120_000);
+
   it('checks shader code and reports compiler errors with lines', async () => {
     const bad = json(await call('godot_visual_shader_check', { code: BAD_SHADER }));
     expect(bad.valid).toBe(false);

@@ -61,7 +61,7 @@ MCP client ──stdio──► godot-mcp (TypeScript, MCP SDK v2)
 - **Live editor first.** When the editor is open with the plugin enabled, every scene edit goes through Godot's undo history (Ctrl+Z undoes anything the agent did) and shows up right away.
 - **Headless fallback.** With no editor running, the same scene and node operations run in a one-shot `godot --headless` process. They edit `.tscn` files through Godot's own APIs, never as hand-edited text.
 - **Secure by default.** The bridge binds to `127.0.0.1` only and needs a fresh random token each time the editor starts. File tools can't leave the project folder. Nothing talks to the internet. See [SECURITY.md](SECURITY.md).
-- **Small context footprint.** The tool list never changes during a session, and every tool carries read-only and destructive hints. Full mode has 90 tools (89 operations plus `godot_tools`, about 15k tokens of definitions). `compact` mode has 14 core tools plus search and call routers for the rest (about 2.2k tokens). `--toolsets` hides whole groups.
+- **Small context footprint.** The tool list never changes during a session, and every tool carries read-only and destructive hints. Full mode has 91 tools (90 operations plus `godot_tools`, about 15k tokens of definitions). `compact` mode has 14 core tools plus search and call routers for the rest (about 2.2k tokens). `--toolsets` hides whole groups.
 - **Asks before irreversible steps.** Clients that support MCP elicitation show a yes/no question before, for example, a file is deleted. Other clients rely on their own permission prompt, driven by each tool's destructive hint.
 
 ## Configuration
@@ -92,7 +92,7 @@ Tool names are `godot_` plus the method with dots replaced, e.g. `godot_node_add
 | script | `script_attach`, `script_validate` |
 | resource | `resource_read`, `resource_create`, `resource_set`, `resource_deps` |
 | visual | `visual_shader_graph`, `visual_shader_graph_read`, `visual_shader_check`, `visual_layout` |
-| anim | `anim_read`, `anim_edit`, `anim_tree_read`, `anim_tree` |
+| anim | `anim_read`, `anim_edit`, `anim_tree_read`, `anim_tree`, `anim_frames` |
 | world | `grid_read`, `grid_edit`, `tileset_edit`, `navigation_bake`, `navigation_path` |
 | audio | `audio_buses`, `audio_edit` |
 | project | `project_set`, `input_edit`, `autoload_edit`, `project_plugins`, `project_validate` |

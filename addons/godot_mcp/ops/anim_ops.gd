@@ -4,7 +4,9 @@ extends RefCounted
 ##
 ## Registered in core/methods.gd (MODULES). `methods()` maps each bridge-protocol method
 ## this module implements to a descriptor (see the comment on Methods.MODULES for kinds).
-## The AnimationTree half lives in core/anim_tree_ops.gd to keep this file readable.
+## The AnimationTree half lives in core/anim_tree_ops.gd and the SpriteFrames half
+## (AnimatedSprite2D/3D flip-book animations) in core/sprite_frames_ops.gd, to keep this
+## file readable.
 ##
 ## How AnimationPlayer edits stay undoable (anim.edit)
 ## ----------------------------------------------------
@@ -45,6 +47,7 @@ const Fuzzy := preload("../core/fuzzy.gd")
 ## Use instead of ResourceSaver.save: keeps uids in headless runs (see res_save.gd).
 const ResSave := preload("../core/res_save.gd")
 const AnimTree := preload("../core/anim_tree_ops.gd")
+const Frames := preload("../core/sprite_frames_ops.gd")
 
 ## Track type names used in params and results, indexed by Animation.TrackType.
 const TRACK_TYPES: PackedStringArray = ["value", "position_3d", "rotation_3d", "scale_3d", "blend_shape", "method", "bezier", "audio", "animation"]
@@ -66,6 +69,11 @@ static func methods() -> Dictionary:
 		"anim.edit": {"kind": "scene_mutation", "fn": plan_edit},
 		"anim.tree_read": {"kind": "scene_read", "fn": AnimTree.read_tree},
 		"anim.tree": {"kind": "scene_mutation", "fn": AnimTree.plan_tree},
+		# One MCP tool (godot_anim_frames), three methods: the server picks the read, the
+		# scene edit (an undoable scene mutation) or the .tres edit (a file resource).
+		"anim.frames": {"kind": "scene_mutation", "fn": Frames.plan_node},
+		"anim.frames_read": {"kind": "scene_read", "fn": Frames.read_node},
+		"anim.frames_file": {"kind": "project", "fn": Frames.edit_file},
 	}
 
 

@@ -37,6 +37,8 @@ describe.skipIf(!enabled)('scene extras: headless', () => {
       await call('godot_node_instance', { scene: 'res://main.tscn', instance: 'res://player.tscn', parent: 'Enemies', name: 'P2', editable_children: true, properties: { position: [5, 6] } }),
     );
     expect(r).toMatchObject({ path: 'Enemies/P2', instance: 'res://player.tscn', editable_children: true, saved: true, backend: 'headless' });
+    // The applied overrides are echoed back, read from the node.
+    expect(r.properties).toEqual({ position: 'Vector2(5, 6)' });
     const tscn = read(proj.dir, 'main.tscn');
     // Linked instance (not copied nodes): no Sprite2D node under P2 is written.
     expect(tscn).toMatch(/\[node name="P2" parent="Enemies"[^\]]*instance=ExtResource\(/);
@@ -147,6 +149,8 @@ describe.skipIf(!enabled)('scene extras: headless', () => {
     expect(r.count).toBe(5);
     expect(r.results.map((x: { method: string }) => x.method)).toEqual(['node.add', 'node.set', 'node.add', 'signal.connect', 'node.reparent']);
     expect(r.results[4].path).toBe('Enemies/Hit');
+    // signal.connect's own "method" (the handler) is kept as "handler", since "method" names the op.
+    expect(r.results[3].handler).toBe('_on_hit_body_entered');
     const tscn = read(proj.dir, 'main.tscn');
     expect(tscn).toContain('[node name="Hit" type="Area2D" parent="Enemies"');
     expect(tscn).toContain('[node name="CollisionShape2D" type="CollisionShape2D" parent="Enemies/Hit"');

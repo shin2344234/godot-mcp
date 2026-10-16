@@ -155,7 +155,7 @@ See [setup.md](setup.md) for where to put them.
 
 ## Too many tools or too much context
 
-Full mode lists 89 tools plus `godot_tools`, about 15k tokens of definitions. If that's too much for your client or model:
+Full mode lists 90 tools plus `godot_tools`, about 15k tokens of definitions. If that's too much for your client or model:
 
 - `--mode compact`: 14 core tools plus three router tools (`godot_tools` to search, `godot_call_read` / `godot_call_write` to run anything else). About 2.2k tokens.
 - `--toolsets files,scene,node,script,run`: only the groups you use (`core` is always on).

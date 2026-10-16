@@ -14,7 +14,7 @@ Needs Godot 4.7 or newer (tested with 4.7.2).
 ### Added
 
 - **MCP server** over stdio for the 2026-07-28 MCP spec, also serving 2025-era clients.
-  89 operations in 21 tool groups, with read-only and destructive hints on every tool.
+  90 operations in 21 tool groups, with read-only and destructive hints on every tool.
 - **Two tool modes**: `full` (every operation is a tool) and `compact` (14 core tools
   plus `godot_tools` search and `godot_call_read` / `godot_call_write` routers).
   `--toolsets` and `--read-only` narrow the list further. A budget test keeps the
@@ -30,7 +30,8 @@ Needs Godot 4.7 or newer (tested with 4.7.2).
   search, write, edit, move and delete, with automatic GDScript syntax checks.
 - **Resources and visual authoring**: `.tres` resources and dependencies, visual
   shader graphs, shader checks, Control layout.
-- **Animation, world and audio**: AnimationPlayer and AnimationTree, TileMapLayer,
+- **Animation, world and audio**: AnimationPlayer, AnimationTree and SpriteFrames
+  (animations cut from sprite sheets), TileMapLayer,
   GridMap and TileSet, navigation baking and paths, audio bus layout.
   `tileset.edit` covers one-way collision, navigation and occlusion layers/polygons,
   per-tile values (custom data by name, modulate, z_index...), alternative tiles and tile

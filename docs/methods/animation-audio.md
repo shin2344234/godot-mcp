@@ -5,7 +5,8 @@ Bridge-protocol methods of the `anim` and `audio` groups, in the style of
 (value codec) and node paths section 4. **(E/H)** = editor and headless.
 
 GDScript: `addons/godot_mcp/ops/anim_ops.gd` (AnimationPlayer, registration),
-`addons/godot_mcp/core/anim_tree_ops.gd` (AnimationTree), `addons/godot_mcp/ops/audio_ops.gd`.
+`addons/godot_mcp/core/anim_tree_ops.gd` (AnimationTree),
+`addons/godot_mcp/core/sprite_frames_ops.gd` (SpriteFrames), `addons/godot_mcp/ops/audio_ops.gd`.
 TypeScript: `server/src/ops/animation.ts`, `server/src/ops/audio.ts`.
 
 | Method | Kind | MCP tool |
@@ -15,6 +16,9 @@ TypeScript: `server/src/ops/animation.ts`, `server/src/ops/audio.ts`.
 | `anim.edit` | scene_mutation | `godot_anim_edit` |
 | `anim.tree_read` | scene_read | `godot_anim_tree_read` |
 | `anim.tree` | scene_mutation | `godot_anim_tree` |
+| `anim.frames_read` | scene_read | `godot_anim_frames` without `ops` |
+| `anim.frames` | scene_mutation | `godot_anim_frames` with `ops` |
+| `anim.frames_file` | project | `godot_anim_frames` with `path` (a .tres) |
 | `audio.buses` | project | `godot_audio_buses` |
 | `audio.edit` | project | `godot_audio_edit` |
 
@@ -160,6 +164,66 @@ Undo design: the call deep-duplicates `tree_root` (`duplicate(true)` copies ever
 node, transition and curve), applies the ops to the copy, and the ChangeSet swaps
 `tree_root` (undo restores the original object). Side effect: tree parameters
 (conditions, blend positions) reset to defaults, as after any root change in the inspector.
+
+### anim.frames / anim.frames_read / anim.frames_file (E/H)
+
+SpriteFrames: the flip-book animations of AnimatedSprite2D / AnimatedSprite3D. One MCP tool,
+`godot_anim_frames`; the server picks the method: `path` (a SpriteFrames `.tres`) →
+`anim.frames_file`; otherwise `node` in a scene → `anim.frames_read` (no `ops`) or
+`anim.frames` (with `ops`).
+
+params: `{ "scene"?, "node"?: "Hero", "path"?: "res://hero_frames.tres", "ops"?: [...] }`
+(`node` and `path` exclude each other; `node` is optional when the scene has one animated sprite).
+
+| op | fields | notes |
+|---|---|---|
+| `add` | animation, speed?, loop?, + the frame fields of `add_frames` | `CONFLICT` if it exists |
+| `remove` | animation | the node's `autoplay` is cleared if it named it |
+| `rename` | animation, to | the node's `animation` and `autoplay` follow |
+| `set` | animation, speed? (FPS, >= 0), loop? (bool) | |
+| `add_frames` | animation, texture, duration?, hframes?/vframes? or frame_size?, cells? or start?/count? | appends frames |
+| `clear` | animation | removes all frames |
+
+Frames: `texture` is a res:// texture or a list of them. Without a grid each texture is one
+whole frame. With `hframes`/`vframes` (columns/rows) or `frame_size: [w, h]` the (single)
+texture is a sprite sheet: each picked cell becomes an embedded `AtlasTexture` (atlas = the
+sheet, region = the cell). `cells` lists row-major indices or `[column, row]` pairs;
+`start` + `count` pick a range (default: every cell from `start`). `duration` is the
+relative frame length (1 = one tick at `speed` FPS). A sheet that is not a whole number of
+cells gives a warning (leftover pixels unused).
+
+Result (all three): the summary
+`{ "node", "resource": ".tres path or null", "animation", "autoplay", "animations": [...] }`
+(`anim.frames_file`: `{ "path", "animations" }`), plus `results` (per op) for edits:
+
+```json
+{ "name": "walk", "speed": 12, "loop": true, "frame_count": 4,
+  "atlas": "res://hero.png", "regions": [[0, 0, 16, 16], [16, 0, 16, 16], [32, 0, 16, 16], [48, 0, 16, 16]],
+  "durations"?: [1, 1, 1, 2] }
+```
+
+Frames that are not all cells of one sheet are listed as `frames: ["res://a.png" |
+{"atlas", "region"} | {"class", "embedded": true}]`; `durations` only appears when a frame is
+not 1; at most 64 frames per animation are listed (`frames_truncated`).
+
+* A node without SpriteFrames gets a new one (`created_frames: true`). Godot creates it with
+  an empty `"default"` animation; when the ops add other animations and never touch
+  `"default"`, it is dropped and the node's `animation` set to the first added one (`note`).
+* The node's `animation` always names an existing animation afterwards (Godot prints errors
+  on every draw otherwise): when it was removed, the first remaining one is used.
+* Ops run in order, all-or-nothing, on a working copy; errors are prefixed `ops[i] (op):`.
+
+Undo design: the working copy is a fresh SpriteFrames whose `animations` array is a copy of
+the live one; the ops use the real SpriteFrames API on it. The ChangeSet swaps the live
+`animations` property (undo: the array read before) and calls `emit_changed()` (setting
+`animations` does not emit it, verified on 4.7.2; the SpriteFrames panel listens to it), then
+`animation`/`autoplay`. A new SpriteFrames is assigned as `sprite_frames` (undo: null). The
+order keeps every `animation` assignment valid (AnimatedSprite2D.set_animation prints an
+error for a missing name). Do → undo → redo was checked to restore the exact state.
+Headless the scene is packed (embedded SpriteFrames and AtlasTextures land in the .tscn). A
+SpriteFrames saved as its own `.tres` is saved in `finish` (`saved_resources`; in the editor
+undo saves it again). `anim.frames_file` edits a `.tres` directly: in the editor one undo step
+`"MCP: anim.frames"` that also saves, like resource.set (`undoable: true`).
 
 ### audio.buses (E/H)
 
