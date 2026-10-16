@@ -10,7 +10,8 @@
  * because orphaned or missing sidecars break references in subtle ways.
  */
 
-import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import type { Stats } from 'node:fs';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
@@ -78,6 +79,41 @@ async function maybeValidate(ctx: OpContext, p: ProjectPath): Promise<unknown> {
   }
 }
 
+/**
+ * stat() for an entry found while walking a folder, or undefined when the walk must skip it.
+ *
+ * resolve() checks the folder a walk STARTS from, but entries found inside it were not
+ * checked: a symlink (or a Windows junction, which Node reports as a symlink) inside the
+ * project could lead the walk to files outside it, and search then returned their text,
+ * including another project's bridge token (Codex review of 0.1.0). So every link is
+ * followed with realpath() and kept only when it stays inside the project and isn't one
+ * of the secret files. `visited` holds the real paths of folders already walked, so a
+ * link back to a parent folder can't loop forever.
+ */
+async function walkEntry(rootReal: string, childAbs: string, visited: Set<string>): Promise<Stats | undefined> {
+  const lst = await lstat(childAbs).catch(() => undefined);
+  if (!lst) return undefined;
+  if (!lst.isSymbolicLink()) {
+    if (lst.isDirectory()) {
+      const real = await realpath(childAbs).catch(() => childAbs);
+      if (visited.has(real)) return undefined;
+      visited.add(real);
+    }
+    return lst;
+  }
+  const real = await realpath(childAbs).catch(() => undefined);
+  if (!real) return undefined; // dangling link
+  const rel = path.relative(rootReal, real);
+  if (rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) return undefined; // leaves the project
+  if (isSecretPath(rel.split(path.sep).join('/'))) return undefined;
+  const st = await stat(real).catch(() => undefined);
+  if (st?.isDirectory()) {
+    if (visited.has(real)) return undefined;
+    visited.add(real);
+  }
+  return st;
+}
+
 function sidecars(p: ProjectPath): string[] {
   return [p.abs + '.uid', p.abs + '.import'].filter((f) => existsSync(f));
 }
@@ -119,6 +155,9 @@ export const filesList = defineOp({
     let truncated = false;
     let hidden = 0;
 
+    // Real path of the project root and of the start folder (seeds the loop guard).
+    const rootReal = await realpath(ctx.config.projectPath);
+    const visited = new Set<string>([await realpath(root.abs).catch(() => root.abs)]);
     const walk = async (abs: string, rel: string): Promise<void> => {
       let names: string[];
       try {
@@ -134,7 +173,7 @@ export const filesList = defineOp({
         if (SKIP_DIRS.has(name)) continue;
         const childAbs = path.join(abs, name);
         const childRel = rel ? `${rel}/${name}` : name;
-        const st = await stat(childAbs).catch(() => undefined);
+        const st = await walkEntry(rootReal, childAbs, visited);
         if (!st) continue;
         if (st.isDirectory()) {
           if (!re) entries.push({ path: `res://${childRel}`, type: 'dir' });
@@ -230,7 +269,8 @@ export const filesSearch = defineOp({
     const nameRe = pattern ? globToRegExp(pattern) : undefined;
     const matches: { path: string; line: number; text: string }[] = [];
     let filesScanned = 0;
-
+    const rootReal = await realpath(ctx.config.projectPath);
+    const visited = new Set<string>([await realpath(root.abs).catch(() => root.abs)]);
     const walk = async (abs: string, rel: string): Promise<void> => {
       const names = (await readdir(abs).catch(() => [])).sort();
       for (const name of names) {
@@ -238,7 +278,7 @@ export const filesSearch = defineOp({
         if (SKIP_DIRS.has(name)) continue;
         const childAbs = path.join(abs, name);
         const childRel = rel ? `${rel}/${name}` : name;
-        const st = await stat(childAbs).catch(() => undefined);
+        const st = await walkEntry(rootReal, childAbs, visited);
         if (!st) continue;
         if (st.isDirectory()) {
           await walk(childAbs, childRel);
@@ -311,6 +351,14 @@ export const filesEdit = defineOp({
     const text = await readFile(file.abs, 'utf8').catch(() => {
       throw new OpError('NOT_FOUND', `File "${file.res}" does not exist. Use godot_files_write to create it.`);
     });
+    // files.read shows lines without their "\r", so on a CRLF file (common on Windows with
+    // git autocrlf) a multi-line old_text copied from it never matched (Codex review of
+    // 0.1.0). Use the file's own line ending in both texts, so the match works and the edit
+    // doesn't mix LF lines into a CRLF file.
+    if (text.includes('\r\n')) {
+      old_text = old_text.replace(/\r?\n/g, '\r\n');
+      new_text = new_text.replace(/\r?\n/g, '\r\n');
+    }
     const count = text.split(old_text).length - 1;
     if (count === 0) {
       throw new OpError('NOT_FOUND', `old_text was not found in "${file.res}". Read the file again (godot_files_read) and copy the text exactly, including indentation.`);

@@ -216,8 +216,11 @@ export class GameRun {
     const attach = (stream: NodeJS.ReadableStream | null, name: 'stdout' | 'stderr') => {
       if (!stream) return;
       let buf = '';
-      stream.on('data', (d: Buffer) => {
-        buf += d.toString('utf8');
+      // setEncoding: decode UTF-8 across chunk boundaries (a character split between two
+      // chunks was decoded as two U+FFFD replacement characters; Codex review of 0.1.0).
+      stream.setEncoding('utf8');
+      stream.on('data', (d: string) => {
+        buf += d;
         const parts = buf.split(/\r?\n/);
         buf = parts.pop() ?? '';
         for (const text of parts) this.push(name, text);
@@ -231,6 +234,17 @@ export class GameRun {
     child.on('exit', (code) => {
       this.running = false;
       this.exitCode = code;
+      session?.close();
+    });
+    // Node emits 'error' (and no 'exit') when the process can't be started at all, e.g. a
+    // missing or non-executable Godot binary. Without a listener that event is unhandled
+    // and takes the whole MCP server down; with only the 'once' listener the release code
+    // in RunManager.start adds, the run stayed "running" forever with its debugger socket
+    // open (Codex review of 0.1.0). Record why and mark the run finished.
+    child.on('error', (err) => {
+      if (!this.running) return;
+      this.running = false;
+      this.push('stderr', `ERROR: could not start Godot: ${err.message}`);
       session?.close();
     });
   }
@@ -382,7 +396,14 @@ export class RunManager {
     if (opts.extraArgs) args.push(...opts.extraArgs);
 
     // Runtime autoload for this boot only (see src/game/override.ts).
-    const release = runtimeInstalled(projectPath) ? await injectRuntime(projectPath) : undefined;
+    let release: (() => Promise<void>) | undefined;
+    try {
+      release = runtimeInstalled(projectPath) ? await injectRuntime(projectPath) : undefined;
+    } catch (err) {
+      // Don't leave the debugger port listening for a game that never starts.
+      session.close();
+      throw err;
+    }
     session.once('connected', () => {
       if (!opts.breakOnErrors) session.send('core:set_ignore_error_breaks', [true]);
       // Godot's SceneDebugger disables game input after a suspend/resume unless the

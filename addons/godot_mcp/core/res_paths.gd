@@ -31,7 +31,11 @@ static func normalize(path: String, param_name: String = "path") -> Dictionary:
 			p = "res://" + p.trim_prefix("/")
 	if p.contains("/../") or p.ends_with("/.."):
 		p = p.simplify_path()
-		if not p.begins_with("res://"):
+		# simplify_path() keeps a ".." it can't resolve: "res://../x.tscn" and
+		# "res://a/../../x.tscn" both come back as "res://../x.tscn", which still starts with
+		# "res://" but points at the folder ABOVE the project (verified on 4.7.2; scene.create
+		# wrote files there). So check for a leading ".." segment, not just the prefix.
+		if not p.begins_with("res://") or p == "res://.." or p.begins_with("res://../"):
 			return R.err(R.BAD_PARAMS, "Parameter '%s' escapes the project folder ('%s')." % [param_name, path])
 	return R.value(p)
 

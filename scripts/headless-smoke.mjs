@@ -91,6 +91,13 @@ e = err("scene.tree", {});
 check(e.code === "BAD_PARAMS" && e.message.includes("scene"), "missing scene param -> BAD_PARAMS", e);
 e = err("scene.tree", { scene: "res://nope.tscn" });
 check(e.code === "NOT_FOUND" && e.message.includes("res://main.tscn"), "missing scene lists existing scenes", e);
+// Paths that climb above the project. Godot's simplify_path() keeps a leading "..", so
+// these used to pass the check and scene.create wrote files next to the project folder.
+for (const bad of ["res://../escape.tscn", "res://a/../../escape.tscn", "../escape.tscn"]) {
+  e = err("scene.create", { path: bad, root_type: "Node2D" });
+  check(e.code === "BAD_PARAMS" && e.message.includes("escapes the project"), `scene.create ${bad} -> BAD_PARAMS`, e);
+}
+check(!existsSync(join(project, "..", "escape.tscn")), "nothing written above the project", join(project, ".."));
 
 // ---- scene.tree --------------------------------------------------------------------------
 r = ok("scene.tree", { scene: S });

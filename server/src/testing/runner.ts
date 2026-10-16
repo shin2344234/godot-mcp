@@ -92,8 +92,11 @@ export function spawnTracked(
     };
     const attach = (stream: NodeJS.ReadableStream) => {
       let buf = '';
-      stream.on('data', (d: Buffer) => {
-        buf += d.toString('utf8');
+      // setEncoding: decode UTF-8 across chunk boundaries (a character split between two
+      // chunks was decoded as two U+FFFD replacement characters; Codex review of 0.1.0).
+      stream.setEncoding('utf8');
+      stream.on('data', (d: string) => {
+        buf += d;
         let nl: number;
         while ((nl = buf.indexOf('\n')) >= 0) {
           onLine(buf.slice(0, nl));

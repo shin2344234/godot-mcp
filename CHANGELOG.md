@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-16
+
+Fixes for the bugs a code review of 0.1.0 found and reproduced.
+
+### Fixed
+
+- **Scene paths could escape the project.** Godot's `simplify_path()` keeps a leading
+  `..`, so `res://../x.tscn` passed the addon's check and `godot_scene_create` wrote files
+  next to the project folder. The addon now rejects such paths, and the server refuses any
+  `res://` value that climbs above the project before it reaches Godot.
+- **`godot_files_search` and recursive `godot_files_list` followed links out of the project.**
+  Symlinks and Windows junctions found while walking are now followed only when they stay
+  inside the project, never into the secret files, and never in a loop.
+- **A Godot binary that can't be started crashed the server.** `godot_run_start` now marks
+  the run finished with the reason in its output, and `godot_editor_launch` reports it.
+- **Non-ASCII characters in Godot output were sometimes garbled** when a character was split
+  between two output chunks (game output, headless calls, exports, tests, the language
+  server).
+- **Multi-line `godot_files_edit` failed on files with Windows (CRLF) line endings.** The
+  edit now matches text copied from `godot_files_read` and keeps the file's line endings.
+
 ## [0.1.0] - 2026-10-16
 
 The first public release. It covers the MCP server
@@ -100,5 +121,6 @@ Needs Godot 4.7 or newer (tested with 4.7.2).
   `--dry-run` previews, `--remove` undoes.
 - **Docs**: a short README with install steps; under `docs/`, per-client setup, the full tool list, how it works, troubleshooting, protocol designs and per-area method references.
 
-[unreleased]: https://github.com/shin2344234/godot-mcp/compare/v0.1.0...HEAD
+[unreleased]: https://github.com/shin2344234/godot-mcp/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/shin2344234/godot-mcp/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/shin2344234/godot-mcp/releases/tag/v0.1.0
