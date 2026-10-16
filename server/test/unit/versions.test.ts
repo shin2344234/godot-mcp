@@ -1,6 +1,7 @@
 /**
  * Release consistency: the version in server/package.json, server/package-lock.json,
- * server/src/version.ts, addons/godot_mcp/plugin.cfg and server.json must agree, and
+ * server/src/version.ts, addons/godot_mcp/plugin.cfg, addons/godot_mcp/core/constants.gd and
+ * server.json must agree, and
  * server.json must name the same npm package / mcpName as package.json.
  *
  * Runs the same check as `npm run check:versions` (scripts/check-versions.mjs at the repo
@@ -21,7 +22,14 @@ const check = checkVersions as (root?: string) => Result;
 const setVersions = setVersionsUntyped as (version: string, root?: string) => void;
 
 /** The files checkVersions reads, relative to the repo root. */
-const FILES = ['server/package.json', 'server/package-lock.json', 'server/src/version.ts', 'addons/godot_mcp/plugin.cfg', 'server.json'];
+const FILES = [
+  'server/package.json',
+  'server/package-lock.json',
+  'server/src/version.ts',
+  'addons/godot_mcp/plugin.cfg',
+  'addons/godot_mcp/core/constants.gd',
+  'server.json',
+];
 
 /** Copy just those files into a throwaway "repo" so a test can corrupt one of them. */
 function fixtureRepo(): string {
@@ -47,7 +55,13 @@ describe('release versions', () => {
     // Every source was actually found and read.
     for (const v of Object.values(result.versions)) expect(v).toBe(SERVER_VERSION);
     expect(Object.keys(result.versions)).toEqual(
-      expect.arrayContaining(['server/package.json', 'server/src/version.ts', 'addons/godot_mcp/plugin.cfg', 'server.json']),
+      expect.arrayContaining([
+        'server/package.json',
+        'server/src/version.ts',
+        'addons/godot_mcp/plugin.cfg',
+        'addons/godot_mcp/core/constants.gd',
+        'server.json',
+      ]),
     );
   });
 
@@ -59,6 +73,17 @@ describe('release versions', () => {
     const result = check(dir);
     expect(result.ok).toBe(false);
     expect(result.problems.join('\n')).toContain('addons/godot_mcp/plugin.cfg: 9.9.9');
+  });
+
+  it('detects an addon PLUGIN_VERSION that drifted from plugin.cfg', () => {
+    // The 0.1.1 release shipped with constants.gd still at 0.1.0 (the addon zip build caught it).
+    const dir = fixtureRepo();
+    temps.push(dir);
+    const gd = path.join(dir, 'addons/godot_mcp/core/constants.gd');
+    writeFileSync(gd, readFileSync(gd, 'utf8').replace(/PLUGIN_VERSION: String = "[^"]+"/, 'PLUGIN_VERSION: String = "0.0.1"'));
+    const result = check(dir);
+    expect(result.ok).toBe(false);
+    expect(result.problems.join('\n')).toContain('addons/godot_mcp/core/constants.gd: 0.0.1');
   });
 
   it('--set bumps every file, and the result passes the check', () => {
