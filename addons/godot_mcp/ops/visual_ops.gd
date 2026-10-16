@@ -227,11 +227,21 @@ static func _op_add_node(vs: VisualShader, t: int, key: String, op: Dictionary) 
 		var ir: Dictionary = _set_port_defaults(vs, t, id, op["inputs"])
 		if R.is_err(ir):
 			return ir
-	return R.value({"id": id, "class": node.get_class(), "shader_type": _type_name(t)})
+	var out: Dictionary = {"id": id, "class": node.get_class(), "shader_type": _type_name(t)}
+	if not (props["value"] as Dictionary).is_empty():
+		# Echo what was set (read back, non-default only), with enum names.
+		var now: Dictionary = RU.non_default_properties(node, 0)
+		for internal: String in NODE_INTERNAL_PROPS:
+			now.erase(internal)
+		out["properties"] = now
+		var names: Dictionary = _enum_names(node, now)
+		if not names.is_empty():
+			out["enum_names"] = names
+	return R.value(out)
 
 
 static func _op_connect(vs: VisualShader, t: int, key: String, op: Dictionary) -> Dictionary:
-	var ends: Dictionary = _connection_ends(vs, t, key, op)
+	var ends: Dictionary = _connection_ends(vs, t, key, op, true)
 	if R.is_err(ends):
 		return ends
 	var from: int = ends["from"]
@@ -239,6 +249,9 @@ static func _op_connect(vs: VisualShader, t: int, key: String, op: Dictionary) -
 	var to: int = ends["to"]
 	var to_port: int = ends["to_port"]
 	var out: Dictionary = {"from": from, "from_port": from_port, "to": to, "to_port": to_port}
+	for extra: String in ["from_port_spec", "expanded_port"]:
+		if ends.has(extra):
+			out[extra] = ends[extra]
 	if vs.is_node_connection(t, from, from_port, to, to_port):
 		out["already_connected"] = true
 		return R.value(out)
@@ -307,7 +320,26 @@ static func _op_set(vs: VisualShader, t: int, key: String, op: Dictionary) -> Di
 		var ir: Dictionary = _set_port_defaults(vs, t, id, op["inputs"])
 		if R.is_err(ir):
 			return ir
-	return R.value({"id": id, "class": node.get_class(), "properties": RU.non_default_properties(node, 0)})
+	var now: Dictionary = RU.non_default_properties(node, 0)
+	for internal: String in NODE_INTERNAL_PROPS:
+		now.erase(internal)
+	var out: Dictionary = {"id": id, "class": node.get_class(), "properties": now}
+	var names: Dictionary = _enum_names(node, now)
+	if not names.is_empty():
+		out["enum_names"] = names
+	return R.value(out)
+
+
+## {property: constant name} for the int enum properties among `props` (e.g. source: 2 ->
+## "SOURCE_2D_TEXTURE"), so a reader does not have to look the numbers up. Names are also
+## accepted as input (core/variant_codec.gd _lookup_enum).
+static func _enum_names(node: VisualShaderNode, props: Dictionary) -> Dictionary:
+	var out: Dictionary = {}
+	for pname: String in props:
+		var label: String = Codec.enum_value_name(node, pname, props[pname])
+		if not label.is_empty():
+			out[pname] = label
+	return out
 
 
 ## Instantiates a VisualShaderNode class; the "VisualShaderNode" prefix is optional.
@@ -398,7 +430,10 @@ static func _set_port_defaults(vs: VisualShader, t: int, id: int, inputs_v: Vari
 
 
 ## Reads from/from_port/to/to_port. `to_port` may name an Output-node port ("albedo").
-static func _connection_ends(vs: VisualShader, t: int, key: String, op: Dictionary) -> Dictionary:
+## `from_port` may name one component of a vector output ("0.a", "color.a"); with `expand`
+## (connect) that port is expanded first, see _component_port. The result then also has
+## "from_port_spec" (what was asked) and, when this call expanded it, "expanded_port".
+static func _connection_ends(vs: VisualShader, t: int, key: String, op: Dictionary, expand: bool = false) -> Dictionary:
 	var f: Dictionary = _existing_id(vs, t, op, "from")
 	if R.is_err(f):
 		return f
@@ -407,8 +442,19 @@ static func _connection_ends(vs: VisualShader, t: int, key: String, op: Dictiona
 		return to_r
 	var from_port_v: Variant = op.get("from_port", 0)
 	var to_port_v: Variant = op.get("to_port", 0)
+	var extra: Dictionary = {}
+	if from_port_v is String and (from_port_v as String).is_valid_int():
+		from_port_v = (from_port_v as String).to_int()
+	elif from_port_v is String:
+		var cp: Dictionary = _component_port(vs, t, int(f["value"]), from_port_v, expand)
+		if R.is_err(cp):
+			return cp
+		extra["from_port_spec"] = from_port_v
+		if int(cp["expanded"]) >= 0:
+			extra["expanded_port"] = cp["expanded"]
+		from_port_v = cp["value"]
 	if not (from_port_v is float or from_port_v is int):
-		return R.err(R.BAD_PARAMS, "'from_port' must be an output port number (0 = first).")
+		return R.err(R.BAD_PARAMS, "'from_port' must be an output port number (0 = first), or one component of a vector output such as \"0.a\".")
 	var to_port: int
 	if to_port_v is String:
 		if int(to_r["value"]) != 0 or key.is_empty():
@@ -421,7 +467,107 @@ static func _connection_ends(vs: VisualShader, t: int, key: String, op: Dictiona
 		to_port = int(to_port_v)
 	else:
 		return R.err(R.BAD_PARAMS, "'to_port' must be an input port number (or an Output port name such as \"albedo\" when to is 0).")
-	return {"from": f["value"], "from_port": int(from_port_v), "to": to_r["value"], "to_port": to_port}
+	var ends: Dictionary = {"from": f["value"], "from_port": int(from_port_v), "to": to_r["value"], "to_port": to_port}
+	ends.merge(extra)
+	return ends
+
+
+# --- expanded vector ports ----------------------------------------------------------------
+#
+# Godot 4 nodes output whole vectors: VisualShaderNodeTexture has ONE output, "color"
+# (vec4), not the separate rgb/alpha ports of Godot 3 (verified on 4.7.2: port 1 cannot be
+# connected). The graph editor's arrow button "expands" a vector output into extra scalar
+# sub-ports placed right after it: an expanded vec4 at port p adds p+1..p+4 (r, g, b, a),
+# and every later output port moves up by 4. The state is the node's
+# `expanded_output_ports` (base port indices); can_connect_nodes() and the generated code
+# use the expanded numbering (expanding Texture port 0 and linking port 4 to Alpha
+# generates `n_out2p4 = n_out2p0.a`, verified). Only expandable ports grow: by default
+# (VisualShaderNode::is_output_port_expandable) that is the output of a node with a SINGLE
+# vector output (Texture, ColorConstant, VectorCompose, Input...); multi-output nodes such as
+# TransformDecompose or ParticleMeshEmitter do not expand (verified: the port count stays
+# the same). For a node that does have later ports, the editor shifts their links when it
+# expands one; _component_port does the same.
+
+## Component names -> index inside a vector port.
+const COMPONENTS: Dictionary = {"x": 0, "y": 1, "z": 2, "w": 3, "r": 0, "g": 1, "b": 2, "a": 3, "alpha": 3}
+
+
+## For each base (unexpanded) output port of node `id`: how many component sub-ports it gets
+## when expanded (0 = not a vector port). Godot exposes no port types to scripts, so each
+## port is expanded alone and the extra connectable ports are counted; the node's own
+## expansion state is restored afterwards.
+static func _port_layout(vs: VisualShader, t: int, id: int) -> Array[int]:
+	var node: VisualShaderNode = vs.get_node(t, id)
+	# Toggle with _set_output_port_expanded: assigning `expanded_output_ports` only ADDS
+	# ports (set([]) clears nothing, verified on 4.7.2).
+	var saved: Array = (node.get("expanded_output_ports") as Array).duplicate()
+	for b: Variant in saved:
+		node.call("_set_output_port_expanded", int(b), false)
+	var base: int = _count_output_ports(vs, t, id)
+	var sizes: Array[int] = []
+	for p: int in range(base):
+		node.call("_set_output_port_expanded", p, true)
+		sizes.append(_count_output_ports(vs, t, id) - base)
+		node.call("_set_output_port_expanded", p, false)
+	for b: Variant in saved:
+		node.call("_set_output_port_expanded", int(b), true)
+	return sizes
+
+
+## Resolves "<port>.<component>" ("0.a", "color.a", "1.x") to an expanded port index.
+## The port is a base output index, or a name: names are not exposed by Godot, so a name is
+## accepted when the node has exactly one vector output (Texture, ColorParameter...). With
+## `expand` the port is expanded if needed (later links shifted like the editor does).
+## Returns {"value": index, "expanded": base port expanded by this call or -1} or an error.
+static func _component_port(vs: VisualShader, t: int, id: int, spec: String, expand: bool) -> Dictionary:
+	var node: VisualShaderNode = vs.get_node(t, id)
+	var dot: int = spec.rfind(".")
+	var comp_name: String = spec.substr(dot + 1).to_lower() if dot > 0 else ""
+	if dot <= 0 or not COMPONENTS.has(comp_name):
+		return R.err(R.BAD_PARAMS, "'from_port' \"%s\" is not a port: pass a number, or one component of a vector output as \"<port>.<x|y|z|w or r|g|b|a>\", e.g. \"0.a\" for the alpha of a Texture node's color." % spec)
+	var base_name: String = spec.left(dot)
+	var sizes: Array[int] = _port_layout(vs, t, id)
+	var vectors: Array[int] = []
+	for p: int in range(sizes.size()):
+		if sizes[p] > 0:
+			vectors.append(p)
+	var base: int = -1
+	if base_name.is_valid_int():
+		base = base_name.to_int()
+		if base < 0 or base >= sizes.size():
+			return R.err(R.BAD_PARAMS, "node %d (%s) has %d output port(s) (0..%d) before expansion; there is no port %d." % [id, node.get_class(), sizes.size(), sizes.size() - 1, base])
+	elif vectors.size() == 1:
+		base = vectors[0]
+	else:
+		return R.err(R.BAD_PARAMS, "Godot does not expose port names, so \"%s\" only works on a node with one expandable vector output; node %d (%s) has them at %s. Use the port number, e.g. \"%d.%s\"." % [spec, id, node.get_class(), str(vectors) if not vectors.is_empty() else "(none)", vectors[0] if not vectors.is_empty() else 0, comp_name])
+	if sizes[base] == 0:
+		return R.err(R.BAD_PARAMS, "output port %d of node %d (%s) cannot be split into components (only vector outputs the graph editor shows with an expand arrow can), so it has no .%s. Expandable outputs: %s." % [base, id, node.get_class(), comp_name, str(vectors) if not vectors.is_empty() else "(none)"])
+	var comp: int = COMPONENTS[comp_name]
+	if comp >= sizes[base]:
+		return R.err(R.BAD_PARAMS, "output port %d of node %d (%s) is a %d-component vector; it has no .%s component." % [base, id, node.get_class(), sizes[base], comp_name])
+	var expanded: Array = node.get("expanded_output_ports")
+	# Where the base port sits in the expanded numbering: after the sub-ports of every
+	# expanded port before it.
+	var start: int = base
+	for b: Variant in expanded:
+		if int(b) < base and int(b) < sizes.size():
+			start += sizes[int(b)]
+	var did_expand: int = -1
+	if not expanded.has(base):
+		if not expand:
+			return R.err(R.NOT_FOUND, "output port %d of node %d is not expanded, so nothing is connected to its components." % [base, id])
+		var shift: int = sizes[base]
+		var moved: Array = []
+		for c: Dictionary in vs.get_node_connections(t):
+			if int(c["from_node"]) == id and int(c["from_port"]) > start:
+				moved.append(c)
+		for c: Dictionary in moved:
+			vs.disconnect_nodes(t, id, int(c["from_port"]), int(c["to_node"]), int(c["to_port"]))
+		node.call("_set_output_port_expanded", base, true)
+		for c: Dictionary in moved:
+			vs.connect_nodes(t, id, int(c["from_port"]) + shift, int(c["to_node"]), int(c["to_port"]))
+		did_expand = base
+	return {"value": start + 1 + comp, "expanded": did_expand}
 
 
 static func _existing_id(vs: VisualShader, t: int, op: Dictionary, field: String) -> Dictionary:
@@ -442,7 +588,16 @@ static func _explain_connect_failure(vs: VisualShader, t: int, key: String, from
 		return R.err(R.BAD_PARAMS, "a node cannot be connected to itself.")
 	var n_out: int = _count_output_ports(vs, t, from)
 	if from_port < 0 or from_port >= n_out:
-		return R.err(R.BAD_PARAMS, "node %d (%s) has %d output port(s) (0..%d); from_port %d does not exist." % [from, from_cls, n_out, n_out - 1, from_port])
+		# Usually a Godot 3 habit: separate alpha/rgb ports. Point at the vector component form.
+		var hint: String = ""
+		var sizes: Array[int] = _port_layout(vs, t, from)
+		var expanded: Array = vs.get_node(t, from).get("expanded_output_ports")
+		for p: int in range(sizes.size()):
+			if sizes[p] > 0 and not expanded.has(p):
+				hint = (" Port %d is a %d-component vector: to use one component pass from_port \"%d.%s\" (components x/y/z/w or r/g/b/a; a Texture node's alpha is \"0.a\")." +
+					" That expands the port like the graph editor's arrow button; its components then get the port numbers right after it.") % [p, sizes[p], p, "a" if sizes[p] == 4 else "x"]
+				break
+		return R.err(R.BAD_PARAMS, "node %d (%s) has %d output port(s) (0..%d); from_port %d does not exist.%s" % [from, from_cls, n_out, n_out - 1, from_port, hint])
 	var n_in: int = _count_input_ports(vs, t, to)
 	if to_port < 0 or to_port >= n_in:
 		var extra: String = ""
@@ -576,6 +731,13 @@ static func shader_graph_read(params: Variant, _env: Dictionary) -> Dictionary:
 				props.erase(internal)
 			if not props.is_empty():
 				entry["properties"] = props
+				var enum_names: Dictionary = _enum_names(node, props)
+				if not enum_names.is_empty():
+					entry["enum_names"] = enum_names
+			# Expanded vector outputs change the port numbering (see _component_port).
+			var expanded: Array = node.get("expanded_output_ports")
+			if not expanded.is_empty():
+				entry["expanded_ports"] = expanded
 			var defaults: Array = node.get_default_input_values()
 			if not defaults.is_empty():
 				var d: Dictionary = {}

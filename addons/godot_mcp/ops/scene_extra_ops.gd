@@ -143,6 +143,13 @@ static func plan_node_instance(root: Node, params: Variant) -> Dictionary:
 		}
 		if String(node.name) != desired:
 			result["renamed_from"] = desired
+		if not props.is_empty():
+			# Echo the applied properties as read back, like node.set's "changed", so the
+			# caller does not need a node.get to verify them (MCP_TEST_LOG).
+			var applied: Dictionary = {}
+			for key: Variant in props:
+				applied[str(key)] = Codec.encode(node.get(str(key)), root)
+			result["properties"] = applied
 		return result
 	return {"changes": cs, "finish": finish}
 

@@ -37,8 +37,21 @@ unsaved in-memory edits are visible). Result:
 
 * `properties` lists stored properties whose value differs from the class (or script)
   default. Embedded sub-resources are expanded `depth` levels (0..4, default 1); deeper
-  ones show only `class` + `embedded`. With `properties` given, only those are returned
+  ones show only `class` + `embedded`. Arrays and dictionaries do not count as a level, so
+  resources inside them are expanded too (e.g. the AtlasTextures in a SpriteFrames'
+  `animations`). With `properties` given, only those are returned
   (nested `a:b` paths allowed; unknown names → `NOT_FOUND` with suggestions).
+* Size cap: `properties` and `theme_items` are shortened to about 2.5k tokens (10 000
+  characters of JSON; a TileSet stores one property per tile and polygon). Small entries are
+  kept whole in key order, big ones are shortened recursively, arrays end with
+  `"…(+N more)"`, and left-out keys are named under the key `"…"`; `truncated` then says so.
+  Read single values with `properties` (nested paths reach e.g. one tile's polygon).
+* A SpriteFrames' `animations` is shown as the `godot_anim_frames` summary (atlas + regions
+  per animation; `edit_with: "godot_anim_frames"`). Curve2D/Curve3D show `points` (see
+  bridge-protocol section 6) instead of the packed `_data`.
+* A scene file (`.tscn`/`.scn`) returns a node list instead of the packed `_bundled` data:
+  `{ "node_count", "nodes": [{"path", "type"? , "instance"?}] (max 100), "note" }`; use
+  scene.tree / node.get for properties.
 * Extra keys: `script` / `script_class` (custom resources), `uniforms` for a Shader
   (`[{"name", "type", "hint_string"?}]`), `theme_items` for a Theme:
   `{"Button": {"colors": {"font_color": "Color(...)"}, "styles": {...}, "variation_of"?: "..."}}`
@@ -61,6 +74,8 @@ params: `{ "path": "res://materials/red.tres", "type"?: "StandardMaterial3D", "p
   the new instance takes over the cached path).
 
 Result: `{ "path", "type", "uid": "uid://..." | null, "properties_set": [...], "overwritten"?: true }`.
+For a global script class `type` is the script class (`"ItemData"`), with `base_type` (the
+native class, e.g. `"Resource"`) and `script` (its path).
 
 ## resource.set (E/H)
 
@@ -77,6 +92,12 @@ params: `{ "path", "properties": { "albedo_color": "#ff0000", "next_pass:albedo_
   the value (so `{"new": "BoxMesh"}` works for `item/0/mesh`). Same for `resource.create`.
 * All values are validated before anything changes. Imported assets (`.import` next to
   them) and scenes are refused with a pointer to `import.set` / `node.set`.
+* Inspector array headers are not properties: TileSet `physics_layers`,
+  `navigation_layers`, `occlusion_layers`, `terrain_sets`, `custom_data_layers` are listed by
+  Godot as `{type: NIL, usage: EDITOR | ARRAY}` but `set()` ignores them. They are rejected
+  (`NOT_FOUND`) and never suggested. As a safety net every value is also tried and read back
+  before the real change: a key that reads back `null` although a value was given →
+  `NOT_FOUND` listing the keys, nothing changed.
 * Editor: edits the cached instance (open scenes update immediately) as one
   EditorUndoRedoManager action `"MCP: resource.set"` that also saves; undo restores the old
   values (removes Theme items it created) and saves again. Headless: load, set, save.
@@ -138,6 +159,21 @@ params:
   sampler), or a cycle. Connecting to an input that is already linked replaces that link
   (as the graph editor does; reported as `replaced`). Connecting an existing link is a no-op
   (`already_connected: true`).
+* `from_port` may name one component of a vector output: `"<port>.<x|y|z|w or r|g|b|a>"`,
+  e.g. `"0.a"` for a Texture node's alpha. Godot 4 nodes output whole vectors
+  (VisualShaderNodeTexture has ONE output, `color`, vec4; there is no separate alpha port).
+  The graph editor's arrow button "expands" such a port into scalar sub-ports numbered right
+  after it (vec4 at port p: p+1..p+4 = r, g, b, a); `connect` does the same
+  (`_set_output_port_expanded`, links of later ports are shifted like the editor does) and
+  reports `from_port` (the resulting index), `from_port_spec` and `expanded_port`. A name
+  instead of the number (`"color.a"`) works on nodes with one expandable output (port names
+  are not exposed to scripts). Only expandable ports split: by default the output of a node
+  with a single vector output; a from_port past the end → `BAD_PARAMS` that suggests
+  `"0.a"`.
+* Int enum properties take names (shared value codec): the inspector label (`"Texture2D"`),
+  or the constant with or without its prefix (`"SOURCE_2D_TEXTURE"`, `"2D_TEXTURE"`,
+  `"OP_TYPE_VECTOR_3D_SCALAR"`). A bad name lists `Label = value (CONSTANT)` for every value.
+  Results and reads add `enum_names: {"source": "SOURCE_2D_TEXTURE"}` next to the numbers.
 * `inputs` sets input-port default values: numbers, booleans, `[x, y(, z, w)]` or literals
   like `"Vector3(1, 0, 0)"`.
 * Ops apply in order and all-or-nothing: headless the file is only saved when every op
@@ -147,7 +183,8 @@ params:
   VisualShader is a file resource). An open visual shader editor tab may need reopening to
   show the change.
 
-Result: `{ "path", "mode", "created", "uid"?, "results": [ {"op": "add_node", "id": 2, "class": "...", "shader_type": "fragment"}, {"op": "connect", "from", "from_port", "to", "to_port", "replaced"?}, ... ], "saved": true }`.
+Result: `{ "path", "mode", "created", "uid"?, "results": [ {"op": "add_node", "id": 2, "class": "...", "shader_type": "fragment", "properties"?, "enum_names"?}, {"op": "connect", "from", "from_port", "to", "to_port", "replaced"?, "from_port_spec"?, "expanded_port"?}, ... ], "saved": true }`.
+`add_node` with `properties` and `set` echo the node's non-default properties as read back.
 
 *Why port probing:* Godot keeps `get_input_port_count/get_output_port_count/get_*_port_name`
 C++-only. Counts are found by asking `can_connect_nodes()` against temporary helper nodes
@@ -169,7 +206,8 @@ params: `{ "path", "shader_type"? }` → result:
 
 Without `shader_type`, untouched graphs (only the Output node, no connections) are omitted.
 `properties` are the node's non-default settings (bookkeeping like `expanded_output_ports`
-is hidden).
+is hidden; expanded outputs are listed as `expanded_ports`, since they change the port
+numbering). Enum values also appear by name in `enum_names`.
 
 ## visual.layout (E/H, scene mutation)
 

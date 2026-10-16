@@ -167,8 +167,14 @@ property's declared `type` (and `hint`/`hint_string` for objects) from
   `{"new": "ClassName", "properties": {...}}` → `ClassDB.instantiate(ClassName)` with
   properties applied recursively (e.g. `{"new":"RectangleShape2D","properties":{"size":[32,32]}}`).
 * `null` → null.
-* int ↔ float coercion as needed; enums accept int or the enum constant name string when
-  resolvable via `hint_string`.
+* int ↔ float coercion as needed; enums accept int or a name: the `hint_string` label
+  (`"Texture2D"`), the enum constant (`"SOURCE_2D_TEXTURE"`), or the constant without its
+  shared prefix, case-insensitive (`"2d texture"`). Some classes (VisualShader nodes) give the
+  enum only on the setter's argument, not on the property, so the setter is checked too. A bad
+  name lists the valid values.
+* Array-header pseudo-properties (type NIL with `PROPERTY_USAGE_ARRAY`, e.g. TileSet
+  `physics_layers`, `navigation_layers`) are not real properties: they are skipped by
+  property lookup and suggestions, so setting one is `NOT_FOUND`.
 * If coercion fails, return `BAD_PARAMS` with the property name, the expected type name
   (`type_string(type)`), and an example of a valid value.
 
@@ -402,6 +408,9 @@ Clarifications of how `addons/godot_mcp` implements the contract above. Fields m
   Extra fields: `"children"` (names), `"groups"`, `"instance"`.
 * Value encoding extra: a top-level embedded resource also gets `"properties"` (its stored
   properties, encoded one level deep), so e.g. a `RectangleShape2D`'s `size` is visible.
+  A `Curve2D` / `Curve3D` there also gets `"points"` (at most 100): `[x, y]` for a plain
+  point, or `{ "position", "in", "out", "tilt"? }` when it has handles or tilt, because the
+  stored `_data` dictionary is unreadable and `point_count` alone says nothing about the path.
   Non-finite floats encode as `"inf"`, `"-inf"`, `"nan"`. All JSON text escapes control
   characters (Godot's `JSON.stringify` does not), so strict parsers accept it.
 * Value decoding extras: `{"resource": "res://..."}` (the encoder's own form) loads a

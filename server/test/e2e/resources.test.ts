@@ -123,11 +123,42 @@ describe.skipIf(!enabled)('resources (headless)', () => {
     const w = json(await call('godot_files_write', { path: 'res://lib/floor_tile_library.gd', content: 'class_name FloorTileLibrary\nextends MeshLibrary\n\n@export var tile_size := 2.0\n' }));
     expect(w.validation?.errors ?? []).toEqual([]);
     const created = json(await call('godot_resource_create', { path: 'res://lib/floor.tres', type: 'FloorTileLibrary', properties: { tile_size: 3.0 } }));
-    expect(created.type).toBe('MeshLibrary');
+    // The script's class is the type; the engine class it extends is base_type.
+    expect(created).toMatchObject({ type: 'FloorTileLibrary', base_type: 'MeshLibrary', script: 'res://lib/floor_tile_library.gd' });
     const text = readFileSync(path.join(proj.dir, 'lib', 'floor.tres'), 'utf8');
     expect(text).toContain('path="res://lib/floor_tile_library.gd"');
     expect(text).toContain('tile_size = 3.0');
   }, 120_000);
+
+  it('refuses TileSet array headers, which are not properties', async () => {
+    // MCP_TEST_LOG: resource.set {navigation_layers: [...]} on a TileSet answered "ok" and
+    // the value read back null; it is only an inspector array header.
+    json(await call('godot_resource_create', { path: 'res://world/tiles.tres', type: 'TileSet' }));
+    const set = errorText(await call('godot_resource_set', { path: 'res://world/tiles.tres', properties: { navigation_layers: [{ layers: 1 }] } }));
+    expect(set).toMatch(/^NOT_FOUND.*navigation_layers.*godot_tileset_edit/s);
+    const read = errorText(await call('godot_resource_read', { path: 'res://world/tiles.tres', properties: ['physics_layers'] }));
+    expect(read).toMatch(/^NOT_FOUND/);
+  }, 60_000);
+
+  it('summarizes scene files and shows curve points', async () => {
+    const scene = json(await call('godot_resource_read', { path: 'res://main.tscn' }));
+    expect(scene.class).toBe('PackedScene');
+    expect(scene.nodes[0]).toEqual({ path: '.', type: 'Node2D' });
+    expect(scene.nodes).toEqual(expect.arrayContaining([{ path: 'Player', instance: 'res://player.tscn' }]));
+    expect(scene.note).toMatch(/scene\.tree/);
+    // Curve2D keeps its points in an opaque _data dictionary; reads show them as points.
+    const curveFile = '[gd_resource type="Curve2D" format=3]\n\n[resource]\n_data = {\n"points": PackedVector2Array(0, 0, 0, 0, 10, 20, 0, 0, 0, 0, 30, 40)\n}\npoint_count = 2\n';
+    json(await call('godot_files_write', { path: 'res://resources/path.tres', content: curveFile }));
+    const curve = json(await call('godot_resource_read', { path: 'res://resources/path.tres' }));
+    expect(curve.properties.points).toEqual([[10, 20], [30, 40]]);
+    // node.get on a Path2D with an embedded curve shows the points the same way.
+    const pathScene =
+      '[gd_scene format=3]\n\n[sub_resource type="Curve2D" id="c"]\n_data = {\n"points": PackedVector2Array(0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 3, 4)\n}\npoint_count = 2\n\n' +
+      '[node name="Root" type="Node2D"]\n\n[node name="Path" type="Path2D" parent="."]\ncurve = SubResource("c")\n';
+    json(await call('godot_files_write', { path: 'res://path_demo.tscn', content: pathScene }));
+    const node = json(await call('godot_node_get', { scene: 'res://path_demo.tscn', path: 'Path', properties: ['curve'] }));
+    expect(node.properties.curve).toMatchObject({ class: 'Curve2D', embedded: true, properties: { point_count: 2, points: [[1, 2], [3, 4]] } });
+  }, 60_000);
 
   it('builds a MeshLibrary from dynamic item/<id>/* properties', async () => {
     const created = json(

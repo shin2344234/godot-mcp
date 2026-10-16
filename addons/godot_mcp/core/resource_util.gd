@@ -295,6 +295,10 @@ static func unknown_property(obj: Object, prop: String, label: String) -> Dictio
 	var msg: String = "%s has no property '%s'.%s Use resource.read to see the current properties." % [label, prop, Fuzzy.did_you_mean(similar)]
 	if obj is Theme:
 		msg += " Theme items use paths like \"Button/colors/font_color\"."
+	if obj is TileSet:
+		# The inspector shows "Physics Layers", "Navigation Layers"... as arrays, but those
+		# are not properties (see Codec.is_array_header): layers are added, then set by index.
+		msg += " TileSet layers are not properties: add them with godot_tileset_edit, then set e.g. \"physics_layer_0/collision_layer\"."
 	return R.err(R.NOT_FOUND, msg, {"similar": similar})
 
 
@@ -337,13 +341,27 @@ static func non_default_properties(obj: Object, depth: int, skip_theme_items: bo
 		if pname == "resource_name" and str(value).is_empty():
 			continue
 		out[pname] = encode_value(value, depth)
+	if obj is Curve2D or obj is Curve3D:
+		# Readable points instead of the packed internal `_data` (in, out, position triples).
+		out.erase("_data")
+		out["points"] = Codec.curve_points(obj)
 	return out
 
 
 ## Encodes a property value: embedded resources become {"class", "embedded", "properties"}
-## while `depth` > 0, external ones {"resource": path, "class"}; arrays/dictionaries holding
-## resources are mapped element by element; everything else uses the shared codec.
-static func encode_value(value: Variant, depth: int) -> Variant:
+## while `depth` > 0, external ones {"resource": path, "class"}; everything else uses the
+## shared codec.
+##
+## Arrays and dictionaries are walked element by element with the SAME depth (containers do
+## not count as a level): resources nested in them are expanded too. This matters for
+## classes that keep their sub-resources in plain containers, e.g. SpriteFrames.animations is
+## [{name, speed, loop, frames: [{texture: <embedded AtlasTexture>, duration}]}]: with the
+## old "Array whose first element is a Resource" rule the AtlasTextures came out as
+## {"class", "embedded", "resource": null} at any depth, so their atlas/region were invisible
+## (MCP_TEST_LOG). `nest` guards against self-referencing containers.
+static func encode_value(value: Variant, depth: int, nest: int = 0) -> Variant:
+	if nest > Codec.MAX_DEPTH:
+		return "…(max depth)"
 	if value is Resource:
 		var r: Resource = value
 		var rp: String = r.resource_path
@@ -353,13 +371,121 @@ static func encode_value(value: Variant, depth: int) -> Variant:
 		if depth > 0:
 			out["properties"] = non_default_properties(r, depth - 1)
 		return out
-	if value is Array and not (value as Array).is_empty() and (value as Array)[0] is Resource:
+	if value is Array:
 		var arr: Array = value
 		var items: Array = []
 		for i: int in range(mini(arr.size(), Codec.MAX_ITEMS)):
-			items.append(encode_value(arr[i], depth))
+			items.append(encode_value(arr[i], depth, nest + 1))
+		if arr.size() > Codec.MAX_ITEMS:
+			items.append("…(+%d more)" % (arr.size() - Codec.MAX_ITEMS))
 		return items
+	if value is Dictionary:
+		var d: Dictionary = value
+		var out_d: Dictionary = {}
+		var count: int = 0
+		for key: Variant in d:
+			if count >= Codec.MAX_ITEMS:
+				out_d["…"] = "(+%d more keys)" % (d.size() - Codec.MAX_ITEMS)
+				break
+			var k: String = str(key) if (key is String or key is StringName) else var_to_str(key)
+			out_d[k] = encode_value(d[key], depth, nest + 1)
+			count += 1
+		return out_d
 	return Codec.encode(value)
+
+
+# ---------------------------------------------------------------------------------------
+# Size cap for read results
+# ---------------------------------------------------------------------------------------
+
+## Shrinks an already-encoded JSON value so its JSON text stays around `budget` characters.
+## Used by resource.read: a TileSet keeps one property per tile and polygon, so a plain read
+## of a real tile set was ~4k tokens (~9k with depth 2, MCP_TEST_LOG) and drowned the
+## answer. Rules, applied recursively:
+## * a dictionary keeps its small entries whole (smallest first, up to half the budget);
+##   the big ones share the rest and are shrunk in turn; entries that still do not fit are
+##   dropped and named under the key "…" so the caller can ask for them;
+## * an array keeps a prefix and ends with "…(+N more)";
+## * a long string is cut with "…(+N chars)".
+## Key order is preserved. Returns the value unchanged when it already fits.
+static func fit(v: Variant, budget: int) -> Variant:
+	if _json_len(v) <= budget:
+		return v
+	if v is Dictionary:
+		return _fit_dict(v, budget)
+	if v is Array:
+		return _fit_array(v, budget)
+	if v is String:
+		var s: String = v
+		var keep: int = maxi(budget - 24, 16)
+		return s.left(keep) + "…(+%d chars)" % (s.length() - keep)
+	return v
+
+
+static func _json_len(v: Variant) -> int:
+	return JSON.stringify(v).length()
+
+
+static func _fit_dict(d: Dictionary, budget: int) -> Dictionary:
+	var keys: Array = d.keys()
+	var sizes: Dictionary = {}
+	for k: Variant in keys:
+		sizes[k] = _json_len(d[k]) + str(k).length() + 4
+	# Small entries (up to 1/8 of the budget each) are kept whole, in key order, while they
+	# fit in half the budget: a TileSet source then shows its first tiles completely rather
+	# than a scattering of every tile's smallest keys. Big entries share what is left.
+	var whole: Dictionary = {}
+	var used: int = 2
+	var big: Array = []
+	var omitted: Array[String] = []
+	for k: Variant in keys:
+		var s: int = sizes[k]
+		if s > budget / 8.0:
+			big.append(k)
+		elif omitted.is_empty() and used + s <= budget / 2.0:
+			whole[k] = true
+			used += s
+		else:
+			# A strict prefix: once one small entry is left out, so are the ones after it.
+			omitted.append(str(k))
+	var shrunk: Dictionary = {}
+	if not big.is_empty():
+		var share: int = floori(float(budget - used - 80) / big.size())
+		for k: Variant in big:
+			var child: Variant = d[k]
+			if share >= 160 and (child is Dictionary or child is Array or child is String):
+				shrunk[k] = fit(child, share - str(k).length() - 4)
+			else:
+				omitted.append(str(k))
+	var out: Dictionary = {}
+	for k: Variant in keys:
+		if whole.has(k):
+			out[k] = d[k]
+		elif shrunk.has(k):
+			out[k] = shrunk[k]
+	if not omitted.is_empty():
+		var names: Array[String] = omitted.slice(0, 8)
+		out["…"] = "%d more key(s) left out to keep the result small: %s%s" % [omitted.size(), ", ".join(names), ", ..." if omitted.size() > names.size() else ""]
+	return out
+
+
+static func _fit_array(a: Array, budget: int) -> Array:
+	var out: Array = []
+	var used: int = 2
+	for i: int in range(a.size()):
+		var item: Variant = a[i]
+		var s: int = _json_len(item) + 1
+		if used + s > budget - 24:
+			if out.is_empty() and (item is Dictionary or item is Array) and budget > 200:
+				# Even the first element is too big: shrink it rather than return nothing.
+				out.append(fit(item, budget - 40))
+			var rest: int = a.size() - out.size()
+			if rest > 0:
+				out.append("…(+%d more)" % rest)
+			return out
+		out.append(item)
+		used += s
+	return out
 
 
 ## Compact listing of a Theme's items: {Type: {colors: {name: value}, constants: {...}, ...}}.
