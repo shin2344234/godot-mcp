@@ -158,6 +158,35 @@ describe('GameRun error bookkeeping', () => {
     expect(run.counts().errors).toBe(1);
   });
 
+  it('tags driver start-up noise as ENV and leaves it out of the counts', async () => {
+    // What every windowed run printed under Xvfb in the 2D dogfood test (Godot 4.7.2):
+    // run_start said errors: 3, warnings: 3 for a game without a bug.
+    const child = fakeChild();
+    const session = fakeSession();
+    const run = new GameRun(child, 'main', false, session);
+    const emitError = (data: unknown[], file: string) => {
+      const d = outputError('Method/function failed. Returning: ERR_BUG', 'Required Vulkan instance extension VK_KHR_surface not found.');
+      d[4] = file;
+      (session as unknown as EventEmitter).emit('message:error', { message: 'error', thread: 1, data: d });
+    };
+    emitError([], 'drivers/vulkan/rendering_context_driver_vulkan.cpp');
+    child.stderr.write('ERROR: Required Vulkan instance extension VK_KHR_surface not found.\n   at: _initialize_instance_extensions (drivers/vulkan/rendering_context_driver_vulkan.cpp:494)\n');
+    child.stderr.write('WARNING: All audio drivers failed, falling back to the dummy driver.\n   at: initialize (servers/audio/audio_server.cpp:258)\n');
+    child.stderr.write("ALSA lib pcm.c:2721:(snd_pcm_open_noupdate) Unknown PCM default\n");
+    child.stderr.write('ERROR: A real one.\n   at: _ready (res://main.gd:3)\n');
+    await flush();
+    expect(run.counts()).toMatchObject({ errors: 1, warnings: 0, environment: 2 });
+    expect(run.read(0, 100, 'all').lines.map((l) => Boolean(l.env))).toEqual([true, true, true, true, true, false, false]);
+    expect(run.read(0, 100, 'error').lines.map((l) => l.text)).toEqual(['ERROR: A real one.', '   at: _ready (res://main.gd:3)']);
+    expect(run.errors[0]?.env).toBe(true);
+    // After the runtime's hello the engine has started: driver errors count again.
+    (run.channel as unknown as { helloResolve: (h: unknown) => void }).helloResolve({});
+    await flush();
+    child.stderr.write('ERROR: Late driver error.\n   at: f (drivers/gles3/rasterizer_gles3.cpp:10)\n');
+    await flush();
+    expect(run.counts()).toMatchObject({ errors: 2, environment: 2 });
+  });
+
   it('splits head and continuation lines', () => {
     expect(isHeadLine('SCRIPT ERROR: x')).toBe('error');
     expect(isHeadLine('USER WARNING: y')).toBe('warning');

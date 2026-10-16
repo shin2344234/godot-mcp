@@ -129,13 +129,22 @@ export const runStop = defineOp({
     const run = ctx.runs.get(run_id);
     if (run && run.running) {
       run.stop();
-      return { data: { run_id: run.id, stopped: true } };
+      // Give the process a moment to exit so the result can carry its exit code.
+      const deadline = Date.now() + 2_000;
+      while (run.running && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+      return { data: { run_id: run.id, stopped: true, exit_code: run.exitCode } };
     }
     if (!run_id && (await ctx.bridge.ensureConnected())) {
-      const result = await ctx.bridge.request('run.stop');
-      return { data: { ...(result as object), mode: 'editor' } };
+      const status = (await ctx.bridge.request('editor.status').catch(() => ({}))) as { is_playing?: boolean };
+      if (status.is_playing || !run) {
+        const result = await ctx.bridge.request('run.stop');
+        return { data: { ...(result as object), mode: 'editor', ...(status.is_playing ? { stopped: true } : { stopped: false, note: 'Nothing was running.' }) } };
+      }
     }
     if (run_id && !run) throw new OpError('NOT_FOUND', `No run with id "${run_id}". Known runs: ${ctx.runs.list().map((r) => r.id).join(', ') || 'none'}.`);
+    // The run ended on its own (quit(), a crash, quit_after_frames): say so with its exit code,
+    // instead of a bare "stopped" that reads as if this call had stopped it.
+    if (run) return { data: { run_id: run.id, stopped: false, exit_code: run.exitCode, note: `Run ${run.id} had already exited (code ${run.exitCode}).` } };
     return { data: { stopped: false, note: 'Nothing was running.' } };
   },
 });
@@ -148,7 +157,10 @@ export const runStop = defineOp({
  */
 function errorPage(run: GameRun, since: number, limit: number, level: 'all' | 'warning' | 'error') {
   const where = (f: { file: string; function: string; line: number }) => `${f.file}:${f.line} in ${f.function}()`;
-  let list = run.errors.filter((e) => e.seq >= since);
+  // Start-up noise from the machine's drivers (runs.ts isEnvSource) is left out here and
+  // in the counts; the lines view still shows it, tagged ENV.
+  const real = run.errors.filter((e) => !e.env);
+  let list = real.filter((e) => e.seq >= since);
   if (level === 'error') list = list.filter((e) => e.level === 'error');
   const page = list.slice(0, limit);
   const merged = new Map<string, Record<string, unknown>>();
@@ -171,8 +183,9 @@ function errorPage(run: GameRun, since: number, limit: number, level: 'all' | 'w
     });
   }
   return {
-    error_count: run.errors.filter((e) => e.level === 'error').length,
-    warning_count: run.errors.filter((e) => e.level === 'warning').length,
+    error_count: real.filter((e) => e.level === 'error').length,
+    warning_count: real.filter((e) => e.level === 'warning').length,
+    ...(real.length < run.errors.length ? { environment: run.errors.length - real.length } : {}),
     next: page.length > 0 ? page[page.length - 1]!.seq + 1 : since,
     more: list.length > page.length,
     errors: [...merged.values()],
@@ -224,7 +237,8 @@ export const runOutput = defineOp({
         dropped: page.dropped,
         // "EVAL" marks the output of a failed godot_debug_control evaluate: Godot prints it
         // like a game error, but it isn't one (not counted, not in errors: true).
-        lines: page.lines.map((l) => `${l.seq} ${l.evaluate ? 'EVAL ' : l.level === 'info' ? '' : l.level.toUpperCase() + ' '}${l.text}`),
+        // "ENV" marks start-up noise from the machine's drivers (not counted, see runs.ts).
+        lines: page.lines.map((l) => `${l.seq} ${l.evaluate ? 'EVAL ' : l.env ? 'ENV ' : l.level === 'info' ? '' : l.level.toUpperCase() + ' '}${l.text}`),
       },
     };
   },

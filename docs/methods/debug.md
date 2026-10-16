@@ -142,6 +142,14 @@ the indented `at:` / backtrace lines under it), so they match `error_count` /
 frame takes one entry. `detail` carries Godot's extra description when there is one;
 `source` (the C++ location) is given only when no script was on the stack.
 
+Start-up noise from the machine's drivers is not counted: an error or warning raised
+before the runtime's hello, with no script on the stack, from `drivers/*`, `platform/*` or
+`servers/audio/audio_server.cpp` (e.g. "Required Vulkan instance extension VK_KHR_surface
+not found", ALSA failures, "All audio drivers failed, falling back to the dummy driver" on
+a server or under Xvfb) is tagged `ENV` in the lines view, left out of `errors: true`, and
+counted separately as `environment`. Without this every windowed run on such a machine
+reported `errors: 3, warnings: 3`, so "no errors" could never be checked at a glance.
+
 ## godot_run_output for games started from the editor
 
 A game started with `godot_run_start {mode: "editor"}` (or from the editor's Play button)
