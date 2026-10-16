@@ -89,7 +89,15 @@ function addonHint(projectPath: string): { addon_hint?: string } {
   if (!src || !existsSync(path.join(projectPath, 'project.godot'))) return {};
   const installed = addonVersion(path.join(projectPath, 'addons', 'godot_mcp'));
   const bundled = addonVersion(src);
-  if (!installed) return { addon_hint: 'The Godot MCP addon is not in this project. Install it with godot_addon_install (or run `npx -y @shin2344234/godot-mcp init` in the project folder).' };
+  // Say what installing buys, so an agent without an editor doesn't conclude that scene
+  // tools need one (MCP_TEST_LOG Phase A: "had to guess" from scene_backend "unavailable").
+  if (!installed) {
+    return {
+      addon_hint:
+        'The Godot MCP addon is not in this project. Install it with godot_addon_install (or run `npx -y @shin2344234/godot-mcp init` in the project folder). ' +
+        'After that, scene, resource and project tools work headless (editing files on disk) without the editor; godot_editor_launch adds live, undoable edits.',
+    };
+  }
   if (bundled && installed !== bundled) return { addon_hint: `The project's Godot MCP addon is ${installed}; this server ships ${bundled}. Update it with godot_addon_install.` };
   return {};
 }

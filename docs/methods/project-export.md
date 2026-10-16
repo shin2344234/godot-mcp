@@ -58,7 +58,7 @@ dialog; a bare `InputEventKey` would get 4.7's keyboard device id):
 
 | spec | notes |
 |---|---|
-| `"Space"`, `"Ctrl+S"` | shorthand for a physical key |
+| `"Space"`, `"Up"`, `"Ctrl+S"` | shorthand for a physical key (every key name, printable or not) |
 | `{"type": "key", "key": "A", "physical"?: true, "ctrl"?, "shift"?, "alt"?, "meta"?}` | names via `OS.find_keycode_from_string` (case-insensitive) plus aliases (esc, return, del, ...); `physical: false` stores the keycode |
 | `{"type": "mouse_button", "button": "left" \| 1}` | left, right, middle, wheel_up/down/left/right, xbutton1/2 |
 | `{"type": "joy_button", "button": "a" \| 0, "device"?}` | JoyButton names + aliases (cross, triangle, lb, start...) |
@@ -69,6 +69,11 @@ with a warning); `remove_action` on one restores the engine default instead of d
 Action names follow the editor's rule (no `/ : = \ "`).
 
 result: `{ "actions": { name: { "deadzone", "events": ["key: Space - Physical", ...] } | null }, "saved": true, "warnings"?: [...] }`
+
+Physical key bindings are described as `"key: <name> - Physical"` for every key; keycode
+bindings (`physical: false`) have no suffix. Godot's own `InputEventKey.as_text()` omits
+the suffix for non-printable keys (`Up`, `Escape`, `F1`), which made physical arrow
+keys look like keycode bindings, so the addon adds it itself.
 
 ## autoload.edit (E/H)
 
@@ -107,9 +112,13 @@ result: `{ "plugins": [ { "path", "name", "version", "enabled", "missing"? } ], 
 
 ## project.validate (E/H, read-only)
 
-params: `{ "scope"?: "all" | "project" | "scenes" | "resources" | "scripts" | "uids", "path_prefix"?: "res://", "deep"?: false, "limit"?: 200, "offset"?: 0 }`
+params: `{ "scope"?: "all" | "project" | "scenes" | "resources" | "scripts" | "uids", "path_prefix"?: "res://", "deep"?: false, "addons"?: false, "limit"?: 200, "offset"?: 0 }`
 
-Checks (files under `path_prefix`, skipping hidden folders and folders with `.gdignore`):
+Checks (files under `path_prefix`, skipping hidden folders and folders with `.gdignore`).
+Files under `res://addons/` (vendored plugins) are skipped unless `addons: true` or
+`path_prefix` is inside `res://addons/`; `checked.addons_skipped` counts them. Project
+files that reference addon files are still checked, and enabled plugins are still
+checked by the `plugin` kind.
 
 | kind | severity | source |
 |---|---|---|
@@ -128,7 +137,7 @@ Checks (files under `path_prefix`, skipping hidden folders and folders with `.gd
 `get_dependencies` reads only the ext_resource list, so no asset is loaded unless `deep`.
 Entries look like `"uid://...::Type::res://path"` when the reference has a UID.
 
-result: `{ "issues": [ { "severity", "kind", "path", "message", "fix_hint" } ], "counts": { "total", "error", "warning", "by_kind" }, "checked": { "files", "scenes", "resources", "scripts" }, "truncated", "next_offset"? }`
+result: `{ "issues": [ { "severity", "kind", "path", "message", "fix_hint" } ], "counts": { "total", "error", "warning", "by_kind" }, "checked": { "files", "scenes", "resources", "scripts", "addons_skipped"? }, "truncated", "next_offset"? }`
 
 ## export.presets (E/H, read-only)
 
@@ -160,7 +169,9 @@ params: `{ "preset"?: name | index, "set"?: { key: value }, "create"?: { "name",
   `runnable`, `custom_features`, `patches`, ...) are fields; anything else (or an
   `options/` prefix) is a platform option. Values are decoded to the type of the current
   value. Unknown options → `NOT_FOUND` with did-you-mean unless `allow_new_keys`
-  (Godot writes every option of a platform, so unknown usually means a typo).
+  (Godot writes every option of a platform, so unknown usually means a typo). This
+  check runs before the secret check below, so an unknown name that merely contains
+  "key" or "pass" gets the did-you-mean, not a secret refusal.
 * `runnable: true` updates `[runnable_presets]` (one runnable preset per platform);
   renaming keeps it in sync. `platform` cannot change.
 * Credential options (keystore/*, codesign/*, notarization/*, provisioning profiles) and
@@ -206,5 +217,6 @@ as a child process (works with or without the editor open):
   then delete `.godot/godot_mcp/session.json`; the server restores the live editor's
   session file afterwards.
 
-result: `{ "preset", "platform", "mode", "output", "exit_code", "duration_s", "files": [ { "path", "size" } ], "errors": [...], "warning_count", "tail": [last 25 lines] }`;
+result: `{ "preset", "platform", "mode", "output", "exit_code", "duration_s", "files": [ { "path", "size" } ], "errors": [...], "warning_count", "tail": [last 25 lines] }`
+(progress lines such as `[ 42% ] savepack | Storing File: ...` go to progress notifications only, never into `tail`);
 a non-zero exit (or no output file) is a `GODOT_ERROR` whose message lists the error lines.

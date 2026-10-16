@@ -16,6 +16,7 @@
  * so the headless runner can refresh the cache only when it is really stale.
  */
 
+import { existsSync } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -26,6 +27,8 @@ export interface ScriptClass {
   path: string;
   /** What the script extends when it names a class (`extends Node2D` / `extends Foo`); undefined for `extends "res://..."` or none. */
   base?: string;
+  /** A cache entry whose script no longer exists at `path` (moved or deleted). */
+  gone?: true;
 }
 
 /** Parse global_script_class_cache.cfg (a ConfigFile with `list=[{...}, ...]`). */
@@ -86,7 +89,8 @@ export class ClassCacheWatcher {
 
   /**
    * Scripts whose class_name the cache is missing or has wrong (other path or
-   * other base), and that changed after the cache was last written. Empty when
+   * other base), and that changed after the cache was last written, plus cache entries
+   * whose script no longer exists (moved or deleted). Empty when
    * the cache is current, or when there is no cache at all (the runner's
    * never-opened-project import handles that).
    */
@@ -115,6 +119,16 @@ export class ClassCacheWatcher {
       const baseDiffers = entry.cls.base !== undefined && hit?.base !== undefined && hit.base !== entry.cls.base;
       if (!hit || hit.path !== res || baseDiffers) stale.push({ name: entry.cls.name, path: res, base: entry.cls.base });
     }
+    // Entries whose script is gone. A move (files.move, a rename on disk) keeps the file's
+    // mtime, so the moved script is older than the cache and the loop above never looks
+    // at it; the cache then still maps the class to the old path, and every headless
+    // compile of the moved script fails with 'Class "X" hides a global script class'
+    // (MCP_TEST_LOG Phase A, files_move). A deleted class_name script leaves the same
+    // dangling entry. Godot drops such entries on its next scan, so --import fixes both.
+    for (const c of cached) {
+      if (!c.path.startsWith('res://') || stale.some((s) => s.name === c.name)) continue;
+      if (!existsSync(path.join(this.projectPath, ...c.path.slice('res://'.length).split('/')))) stale.push({ ...c, gone: true });
+    }
     return stale;
   }
 
@@ -125,7 +139,9 @@ export class ClassCacheWatcher {
   async needsRefresh(): Promise<ScriptClass[]> {
     const stale = await this.staleClasses();
     if (!stale.length) return [];
-    const sig = stale.map((s) => `${s.name}@${s.path}:${s.base ?? ''}`).sort().join('|');
+    // `gone` is part of it: a class just written at a path, then moved away from it, has
+    // the same name, path and base both times, and must still trigger the second refresh.
+    const sig = stale.map((s) => `${s.gone ? '!' : ''}${s.name}@${s.path}:${s.base ?? ''}`).sort().join('|');
     if (sig === this.lastAttempt) return [];
     this.lastAttempt = sig;
     return stale;

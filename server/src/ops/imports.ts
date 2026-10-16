@@ -28,8 +28,8 @@ export const importGet = defineOp({
   name: 'import.get',
   group: 'import',
   title: 'Get import settings',
-  description: 'Godot import: show an asset\'s importer, options, uid and whether its imported files exist (imports new assets first).',
-  input: z.object({ path: asset }),
+  description: 'Godot import: show an asset\'s importer, non-default options (full: all), uid and whether its imported files exist (imports new assets first).',
+  input: z.object({ path: asset, full: z.boolean().optional() }),
   readOnly: true,
   idempotent: true,
   run: (args, ctx) => withFirstImport(ctx, () => forwardOp(ctx, 'import.get', args)),
@@ -42,7 +42,7 @@ export const importSet = defineOp({
   description: 'Godot import: change an asset\'s import options (or importer) and reimport it.',
   input: z.object({
     path: asset,
-    options: z.record(z.string(), z.unknown()).optional().describe('Option keys from import.get, e.g. {"compress/mode": 2}.'),
+    options: z.record(z.string(), z.unknown()).optional().describe('Option keys from import.get (full), e.g. {"compress/mode": 2}.'),
     importer: z.string().optional().describe('Switch importer, e.g. "image", "keep".'),
   }),
   readOnly: false,
@@ -54,8 +54,11 @@ export const importSet = defineOp({
     if (data.reimport !== 'pending') return res;
     // Headless: the .import file is written; run Godot's importer, then read back.
     await reimportHeadless(ctx);
-    const after = await forwardOp(ctx, 'import.get', { path: data.path });
-    return { data: { ...data, ...(after.data as object), changed: data.changed, reimport: 'done' } };
+    const after = (await forwardOp(ctx, 'import.get', { path: data.path })).data as Record<string, unknown>;
+    // Like the editor path (import_ops.gd _import_state): whether the reimport worked, not
+    // the whole option list again (MCP_TEST_LOG Phase A: ~600 tokens per call for 1-2 changes).
+    const state = { importer: after.importer, imported: after.imported, ...(after.import_failed ? { import_failed: true } : {}) };
+    return { data: { ...data, ...state, reimport: 'done' } };
   },
 });
 

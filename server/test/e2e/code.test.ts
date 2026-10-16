@@ -56,7 +56,8 @@ function freePort(): Promise<number> {
   });
 }
 
-const BROKEN = 'extends Node\n\nfunc f() -> void:\n\tvar x: int = "text"\n\tundefined_fn()\n\tvar unused := 3\n';
+const DECLS = 'extends Node\nvar knock := Vector2(1, 2)\nfunc take_hit(knockback: Vector2 = Vector2(0, -180), label: String = "a, b") -> void:\n\tpass\n';
+const BROKEN ='extends Node\n\nfunc f() -> void:\n\tvar x: int = "text"\n\tundefined_fn()\n\tvar unused := 3\n';
 
 describe.skipIf(!enabled)('code tools: private LSP editor', () => {
   const proj = copySampleProject();
@@ -66,6 +67,7 @@ describe.skipIf(!enabled)('code tools: private LSP editor', () => {
   beforeAll(async () => {
     importProject(proj.dir);
     writeFileSync(path.join(proj.dir, 'broken.gd'), BROKEN);
+    writeFileSync(path.join(proj.dir, 'decls.gd'), DECLS);
     client = await startServer({ project: proj.dir, era: 'modern' });
   }, 240_000);
   afterAll(async () => {
@@ -96,7 +98,7 @@ describe.skipIf(!enabled)('code tools: private LSP editor', () => {
 
   it('checks a folder and skips addons/', async () => {
     const r = json(await call('godot_code_diagnostics', { paths: ['res://'] }));
-    expect(r.checked).toBe(5); // broken, enemy, game_state, main, player; nothing from addons/
+    expect(r.checked).toBe(6); // broken, decls, enemy, game_state, main, player; nothing from addons/
     expect(r.note).toMatch(/addons/);
   }, 60_000);
 
@@ -111,6 +113,16 @@ describe.skipIf(!enabled)('code tools: private LSP editor', () => {
     expect(r.doc).toMatch(/player controller/);
     expect(r.symbols).toContain('4: @export var speed: float = 200.0');
     expect(r.symbols).toContain('10: func _physics_process(delta: float) -> void');
+  }, 60_000);
+
+  it('shows signal parameter types and source defaults (MCP_TEST_LOG Phase A)', async () => {
+    // Godot's own detail says `signal score_changed(new_score)` and quotes non-String
+    // defaults (`= "(0.0, -180.0)"`); code.symbols repairs both from the source.
+    const gs = json(await call('godot_code_symbols', { path: 'res://game_state.gd' }));
+    expect(gs.symbols).toContain('5: signal score_changed(new_score: int)');
+    const d = json(await call('godot_code_symbols', { path: 'res://decls.gd' }));
+    expect(d.symbols).toContain('2: var knock: Vector2 = Vector2(1, 2)');
+    expect(d.symbols).toContain('3: func take_hit(knockback: Vector2 = Vector2(0, -180), label: String = "a, b") -> void');
   }, 60_000);
 
   it('finds symbols by name across scripts', async () => {

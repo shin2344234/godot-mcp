@@ -27,6 +27,8 @@ const ResPaths := preload("res_paths.gd")
 const ScriptValidate := preload("script_validate.gd")
 
 const SCOPES: PackedStringArray = ["all", "project", "scenes", "resources", "scripts", "uids"]
+## Vendored plugins live here; skipped unless params.addons is true (see run()).
+const ADDONS_DIR: String = "res://addons/"
 const SCENE_EXT: PackedStringArray = ["tscn", "scn"]
 const RESOURCE_EXT: PackedStringArray = ["tres", "res"]
 ## Files that get a `.uid` sidecar in Godot 4.4+ (their formats cannot store a UID).
@@ -80,6 +82,7 @@ static func run(params: Dictionary, _env: Dictionary) -> Dictionary:
 	var scope: String = p.opt_string("scope", "all")
 	var prefix_raw: String = p.opt_string("path_prefix", "res://")
 	var deep: bool = p.opt_bool("deep", false)
+	var include_addons: bool = p.opt_bool("addons", false)
 	var c := Collector.new()
 	c.limit = p.opt_int("limit", 200)
 	c.offset = p.opt_int("offset", 0)
@@ -97,13 +100,26 @@ static func run(params: Dictionary, _env: Dictionary) -> Dictionary:
 
 	var files: PackedStringArray = []
 	_walk(root_dir, files)
+	# Vendored plugins under res://addons/ (GUT, this addon, ...) are someone else's files:
+	# their orphan .uid files and warnings are noise the user can't act on (MCP_TEST_LOG
+	# Phase A: addons/gut/menu_manager.gd.uid flagged as orphan_uid). They are skipped
+	# unless `addons` is set or path_prefix points inside res://addons/ (then the caller
+	# asked for them). Project files that depend on addon files are still checked.
+	var skip_addons: bool = not include_addons and not prefix.begins_with(ADDONS_DIR)
 	var filtered: PackedStringArray = []
+	var skipped_addons: int = 0
 	for f: String in files:
-		if f.begins_with(prefix):
-			filtered.append(f)
+		if not f.begins_with(prefix):
+			continue
+		if skip_addons and f.begins_with(ADDONS_DIR):
+			skipped_addons += 1
+			continue
+		filtered.append(f)
 	filtered.sort()
 
 	var checked: Dictionary = {"files": filtered.size(), "scenes": 0, "resources": 0, "scripts": 0}
+	if skipped_addons > 0:
+		checked["addons_skipped"] = skipped_addons
 	if scope in ["all", "project"]:
 		_check_project(c)
 	for f: String in filtered:

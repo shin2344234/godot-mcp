@@ -25,7 +25,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { OpError } from '../errors.js';
 import type { LspDiagnostic, LspDocumentSymbol, LspLocation, LspRange } from '../lsp/client.js';
-import { completionHint, findIdentifier, GdMask, isIdentifier } from '../lsp/gdscriptText.js';
+import { completionHint, findIdentifier, fixDeclDetail, GdMask, isIdentifier } from '../lsp/gdscriptText.js';
 import { lspManagerFor, type LspSession } from '../lsp/manager.js';
 import { pathToFileUri, uriToProjectRel } from '../lsp/uri.js';
 import { isInGodotCache, PathError, resolveProjectPathStrict, type ProjectPath } from '../project/paths.js';
@@ -220,16 +220,25 @@ function formatDiagnostic(d: LspDiagnostic) {
 // ---------------------------------------------------------------------------------------
 // code.symbols
 
-/** One outline line: "12: func jump(force: float) -> void". */
-function outline(symbols: LspDocumentSymbol[], indent = ''): string[] {
+/**
+ * The declaration text of a symbol: Godot's detail, with defaults and signal parameter
+ * types repaired from the script's lines (fixDeclDetail in lsp/gdscriptText.ts).
+ */
+function declOf(s: LspDocumentSymbol, kind: string, lines: string[]): string {
+  if (!s.detail) return s.name;
+  return fixDeclDetail(s.detail, kind, s.name, lines, s.selectionRange.start.line);
+}
+
+/** One outline line: "12: func jump(force: float) -> void". `lines`: the script's source. */
+function outline(symbols: LspDocumentSymbol[], lines: string[], indent = ''): string[] {
   const out: string[] = [];
   for (const s of symbols) {
     const kind = SYMBOL_KIND[s.kind] ?? 'symbol';
     if (kind === 'enum_value' || kind === 'param') continue; // shown inside the enum/func detail
-    const decl = s.detail && s.detail.includes(s.name) ? s.detail : `${kind} ${s.name}${s.detail ? ` ${s.detail}` : ''}`;
+    const decl = s.detail && s.detail.includes(s.name) ? declOf(s, kind, lines) : `${kind} ${s.name}${s.detail ? ` ${s.detail}` : ''}`;
     const doc = s.documentation ? `  ## ${s.documentation.split('\n')[0]!.slice(0, 120)}` : '';
     out.push(`${indent}${s.selectionRange.start.line + 1}: ${decl}${doc}`);
-    if (kind === 'class' && s.children?.length) out.push(...outline(s.children, indent + '  '));
+    if (kind === 'class' && s.children?.length) out.push(...outline(s.children, lines, indent + '  '));
   }
   return out;
 }
@@ -242,12 +251,12 @@ interface FlatSymbol {
   container?: string;
 }
 
-function flatten(symbols: LspDocumentSymbol[], container: string | undefined, out: FlatSymbol[]): FlatSymbol[] {
+function flatten(symbols: LspDocumentSymbol[], lines: string[], container: string | undefined, out: FlatSymbol[]): FlatSymbol[] {
   for (const s of symbols) {
     const kind = SYMBOL_KIND[s.kind] ?? 'symbol';
     if (kind === 'param') continue;
-    out.push({ name: s.name, kind, line: s.selectionRange.start.line + 1, decl: s.detail || s.name, ...(container ? { container } : {}) });
-    if (s.children?.length) flatten(s.children, s.name, out);
+    out.push({ name: s.name, kind, line: s.selectionRange.start.line + 1, decl: declOf(s, kind, lines), ...(container ? { container } : {}) });
+    if (s.children?.length) flatten(s.children, lines, s.name, out);
   }
   return out;
 }
@@ -278,7 +287,7 @@ export const codeSymbols = defineOp({
 
     if (!query) {
       if (st.isDirectory()) throw new OpError('BAD_PARAMS', `"${target.res}" is a folder. Pass a .gd file to outline it, or add "query" to search symbol names in the folder.`);
-      await readScript(target);
+      const lines = (await readScript(target)).split(/\r?\n/);
       const session = await lspManagerFor(ctx.config).acquire(ctx);
       const roots = await documentSymbols(session, target.abs);
       const root = roots[0];
@@ -288,7 +297,7 @@ export const codeSymbols = defineOp({
           path: target.res,
           class: root.name,
           ...(root.documentation ? { doc: root.documentation.slice(0, 400) } : {}),
-          symbols: outline(root.children ?? []),
+          symbols: outline(root.children ?? [], lines),
         },
       };
     }
@@ -305,7 +314,8 @@ export const codeSymbols = defineOp({
       let entry = symbolCache.get(f.abs);
       if (!entry || entry.stamp !== stamp) {
         const roots = await documentSymbols(session, f.abs).catch(() => []);
-        entry = { stamp, symbols: flatten(roots, undefined, []) };
+        const lines = (await readFile(f.abs, 'utf8').catch(() => '')).split(/\r?\n/);
+        entry = { stamp, symbols: flatten(roots, lines, undefined, []) };
         symbolCache.set(f.abs, entry);
       }
       for (const s of entry.symbols) {

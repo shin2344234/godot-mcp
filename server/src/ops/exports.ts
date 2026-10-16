@@ -208,6 +208,8 @@ interface RunArgs {
 }
 
 const ANSI = /\x1b\[[0-9;]*[A-Za-z]/g;
+/** An export progress line, "[  42% ] savepack | Storing File: res://x.png": percent, then the step. */
+export const PROGRESS_LINE = /^\[\s*(\d+)%\s*\]\s*(.*)$/;
 const SESSION_REL = path.join('.godot', 'godot_mcp', 'session.json');
 
 /** Resolve the output file; relative paths and res:// are inside the project. */
@@ -336,18 +338,22 @@ function spawnExport(file: string, args: string[], cwd: string, timeoutMs: numbe
     const onLine = (raw: string) => {
       const text = raw.replace(ANSI, '').replace(/\r/g, '').trimEnd();
       if (!text.trim()) return;
-      previous = classifyLine(text, previous);
-      out.lines.push({ level: previous, text });
-      if (out.lines.length > 400) out.lines.shift();
       // Godot prints "[  42% ] savepack | Storing File: res://..." during exports.
-      const m = /^\[\s*(\d+)%\s*\]\s*(.*)$/.exec(text);
+      const m = PROGRESS_LINE.exec(text);
       if (m) {
         const pct = Number(m[1]);
         if (pct !== lastPct) {
           lastPct = pct;
           ctx.progress?.(pct, 100, m[2]!.slice(0, 120));
         }
+        // Progress lines go to progress notifications only, never into `lines`: a pack
+        // export prints one per file, so the result's `tail` used to be ~25 "savepack |
+        // Storing File" lines (MCP_TEST_LOG Phase A) and pushed real messages out of it.
+        return;
       }
+      previous = classifyLine(text, previous);
+      out.lines.push({ level: previous, text });
+      if (out.lines.length > 400) out.lines.shift();
     };
     const attach = (stream: NodeJS.ReadableStream) => {
       let buf = '';

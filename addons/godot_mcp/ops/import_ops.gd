@@ -62,16 +62,19 @@ static func methods() -> Dictionary:
 	}
 
 
-## params: {path} -> importer, type, uid, options, dest files and whether they exist.
+## params: {path, full?} -> importer, type, uid, options, dest files and whether they exist.
+## Options are the non-default ones unless `full` (a texture has ~26 options; all of them on
+## every call cost ~600 tokens, MCP_TEST_LOG Phase A).
 static func get_import(params: Variant, _env: Dictionary) -> Dictionary:
 	var p := Params.new(params, "import.get")
 	var raw: String = p.req_string("path")
+	var full: bool = p.opt_bool("full", false)
 	if p.failed():
 		return p.error
 	var loaded: Dictionary = _load_import(raw, "import.get")
 	if R.is_err(loaded):
 		return loaded
-	return R.ok(_describe(loaded["path"], loaded["config"]))
+	return R.ok(_describe(loaded["path"], loaded["config"], full))
 
 
 ## params: {path, options?: {key: value}, importer?}
@@ -127,7 +130,8 @@ static func set_import(params: Variant, env: Dictionary) -> Dictionary:
 		(env["filesystem"] as Object).call("reimport_files", PackedStringArray([path]))
 		var after := ConfigFile.new()
 		after.load(path + ".import")
-		out.merge(_describe(path, after))
+		# Only whether it worked; `changed` already says what changed (import.get shows more).
+		out.merge(_import_state(path, after))
 		out["reimport"] = "done"
 	else:
 		# The server runs `godot --headless --import` next and then reads the result back.
@@ -162,21 +166,31 @@ static func _load_import(raw: String, label: String) -> Dictionary:
 	return {"path": path, "config": cf}
 
 
-static func _describe(path: String, cf: ConfigFile) -> Dictionary:
+## Describes an asset's import. `full` lists every option; otherwise only the options that
+## differ from the importer's defaults (see _importer_defaults), plus how many there are.
+static func _describe(path: String, cf: ConfigFile, full: bool = true) -> Dictionary:
 	var options: Dictionary = {}
+	var importer_name: String = str(cf.get_value("remap", "importer", ""))
+	var defaults: Dictionary = {} if full else _importer_defaults(importer_name)
+	var total: int = 0
 	if cf.has_section("params"):
 		for key: String in cf.get_section_keys("params"):
-			options[key] = Codec.encode(cf.get_value("params", key))
+			var value: Variant = cf.get_value("params", key)
+			total += 1
+			# var_to_str compares across types the way the file stores them (1 vs 1.0,
+			# arrays, dictionaries); an option the table lacks is always shown.
+			if defaults.has(key) and var_to_str(defaults[key]) == var_to_str(value):
+				continue
+			options[key] = Codec.encode(value)
 	var dests: Array = []
 	var all_exist: bool = true
 	for d: Variant in cf.get_value("deps", "dest_files", []):
 		var exists: bool = FileAccess.file_exists(str(d))
 		all_exist = all_exist and exists
 		dests.append({"path": str(d), "exists": exists})
-	var importer: String = str(cf.get_value("remap", "importer", ""))
 	var out: Dictionary = {
 		"path": path,
-		"importer": importer,
+		"importer": importer_name,
 		"type": cf.get_value("remap", "type", null),
 		"uid": cf.get_value("remap", "uid", null),
 		"options": options,
@@ -184,10 +198,42 @@ static func _describe(path: String, cf: ConfigFile) -> Dictionary:
 		# "keep"/"skip" produce no imported copy; otherwise every dest file must exist.
 		"imported": all_exist and not dests.is_empty() and bool(cf.get_value("remap", "valid", true)),
 	}
+	if not defaults.is_empty():
+		# Compact view: say what was left out, so an empty `options` isn't read as "none".
+		out["options_shown"] = "%d of %d (non-default); full: true lists all" % [options.size(), total]
 	if cf.has_section_key("remap", "valid") and not bool(cf.get_value("remap", "valid")):
 		out["import_failed"] = true
-	if importer in ["keep", "skip"]:
+	if importer_name in ["keep", "skip"]:
 		out["imported"] = null
+	return out
+
+
+## Default option values of a built-in importer: core/import_defaults.cfg (generated from
+## real imports by scripts/gen-import-defaults.sh; no script API lists an importer's
+## options), overlaid with the project's own defaults (Import dock > "Set as Default",
+## stored as the importer_defaults/<importer> project setting). Empty for importers the
+## table doesn't know (plugins' importers): those always show every option.
+static func _importer_defaults(importer: String) -> Dictionary:
+	var out: Dictionary = {}
+	var cf := ConfigFile.new()
+	var file: String = (R as Script).resource_path.get_base_dir().path_join("import_defaults.cfg")
+	if importer.is_empty() or cf.load(file) != OK or not cf.has_section(importer):
+		return out
+	for key: String in cf.get_section_keys(importer):
+		out[key] = cf.get_value(importer, key)
+	var project: Variant = ProjectSettings.get_setting("importer_defaults/" + importer, null)
+	if project is Dictionary:
+		out.merge(project as Dictionary, true)
+	return out
+
+
+## The short part of _describe a set_import reply carries: whether the reimport worked,
+## not the option list (the caller just changed `changed` and knows the rest).
+static func _import_state(path: String, cf: ConfigFile) -> Dictionary:
+	var d: Dictionary = _describe(path, cf, true)
+	var out: Dictionary = {"importer": d["importer"], "imported": d["imported"]}
+	if d.has("import_failed"):
+		out["import_failed"] = true
 	return out
 
 
