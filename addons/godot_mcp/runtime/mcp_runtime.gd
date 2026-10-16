@@ -41,7 +41,11 @@ const MODULES: Array = [
 	preload("ops/rt_live.gd"),
 	preload("ops/rt_input.gd"),
 	preload("ops/rt_view.gd"),
+	preload("ops/rt_output.gd"),
 ]
+
+## Captures the game's output for runs started from the editor (rt.output; see the file).
+const Output := preload("ops/rt_output.gd")
 
 var _methods: Dictionary = {}
 var _registered: bool = false
@@ -58,6 +62,7 @@ func _enter_tree() -> void:
 		_methods.merge((m as GDScript).call("methods"), true)
 	EngineDebugger.register_message_capture("mcp", _on_message)
 	_registered = true
+	Output.install()
 
 
 func _ready() -> void:
@@ -70,6 +75,8 @@ func _ready() -> void:
 func _exit_tree() -> void:
 	if _registered and EngineDebugger.has_capture("mcp"):
 		EngineDebugger.unregister_message_capture("mcp")
+	if _registered:
+		Output.uninstall()
 	_registered = false
 
 

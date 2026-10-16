@@ -142,6 +142,26 @@ the indented `at:` / backtrace lines under it), so they match `error_count` /
 frame takes one entry. `detail` carries Godot's extra description when there is one;
 `source` (the C++ location) is given only when no script was on the stack.
 
+## godot_run_output for games started from the editor
+
+A game started with `godot_run_start {mode: "editor"}` (or from the editor's Play button)
+sends its output to the editor's Output panel over the editor's debugger connection, and
+the editor gives plugins no way to read it (its `output` and `error` messages are handled
+before `EditorDebuggerPlugin` captures, `ScriptEditorDebugger::_parse_message`). So the
+game's runtime keeps its own copy: `runtime/ops/rt_output.gd` installs a `Logger`
+(`OS.add_logger`, Godot 4.5+) that keeps the newest 2000 entries, and `godot_run_output`
+reads it with the runtime method `rt.output` when `run_id` is `"editor"`, or by default
+when no process run of this server is running. Both views have the same shape as for
+process runs (`run_id: "editor"`, no `exit_code`):
+
+- lines: `"<seq> text"`, `"<seq> ERROR text (at res://x.gd:3 in f())"`,
+  `"<seq> WARNING ..."`; `printerr()` lines are tagged `[stderr]` but not counted as errors.
+- errors (`errors: true`): `{seq, message, at, callers}` (or `source` when no script was on
+  the stack), merged with `count` like above.
+
+Output printed before the runtime autoload entered the tree (by autoloads that load
+earlier) is not captured.
+
 ## Wire protocol (verified against Godot 4.7.2)
 
 Source: `core/debugger/remote_debugger.cpp`, `core/debugger/debugger_marshalls.cpp`,

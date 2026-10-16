@@ -342,4 +342,22 @@ describe.skipIf(!enabled)('live game: game started from the editor (relay)', () 
     const ok = json(await client.callTool({ name: 'godot_game_eval', arguments: { mode: 'gdscript', code: 'return node.clicks' } }));
     expect(ok.result).toBe(1);
   }, 60_000);
+
+  it('reads the output of the editor\'s game with godot_run_output', async () => {
+    // The editor keeps a game's output in its Output panel only; the runtime's Logger keeps
+    // a copy so run_output works for editor runs too (no process run exists here).
+    json(await client.callTool({ name: 'godot_game_eval', arguments: { mode: 'gdscript', code: 'print("from-editor-run")\nprinterr("to-stderr")\npush_warning("careful-now")\nreturn 1' } }));
+    const out = json(await client.callTool({ name: 'godot_run_output', arguments: {} }));
+    expect(out).toMatchObject({ run_id: 'editor', running: true, warning_count: 1 });
+    expect(out.error_count).toBeGreaterThanOrEqual(1);
+    const text = out.lines.join('\n');
+    expect(text).toMatch(/^\d+ from-editor-run$/m);
+    expect(text).toMatch(/^\d+ \[stderr\] to-stderr$/m);
+    expect(text).toMatch(/^\d+ WARNING careful-now \(at .* in /m);
+    const errs = json(await client.callTool({ name: 'godot_run_output', arguments: { run_id: 'editor', errors: true } }));
+    // The previous test's snippet that did not compile is in there too, as an error.
+    expect(errs.errors).toEqual(expect.arrayContaining([expect.objectContaining({ warning: true, message: 'careful-now' })]));
+    const later = json(await client.callTool({ name: 'godot_run_output', arguments: { since: out.next } }));
+    expect(later.lines).toEqual([]);
+  }, 60_000);
 });

@@ -17,6 +17,7 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { z } from 'zod';
 import { OpError } from '../errors.js';
+import { resolveGame } from '../game/hub.js';
 import { findGodot, GODOT_NOT_FOUND_HINT } from '../godot/binary.js';
 import type { GameRun } from '../godot/runs.js';
 import { log } from '../log.js';
@@ -65,7 +66,7 @@ export const runStart = defineOp({
           // godot_editor_logs reads. The old note pointed at editor_logs, where the game's
           // prints never showed up.
           note:
-            'Started in the editor. godot_game_* tools work on it once its runtime loads. Its print() and error output appears in the editor\'s Output panel only; godot_editor_logs does not include it (that is the editor\'s own log). To capture game output, run with mode "process" and read godot_run_output.',
+            'Started in the editor. godot_game_* tools work on it once its runtime loads. Read its print() and error output with godot_run_output (run_id "editor"); godot_editor_logs is the editor\'s own log.',
         },
       };
     }
@@ -183,9 +184,9 @@ export const runOutput = defineOp({
   group: 'run',
   title: 'Game output',
   description:
-    'Godot run: read output and errors from a game started with godot_run_start (process mode). Use level "error" to see only errors, and "since" (the "next" value from the last call) to page.',
+    'Godot run: read output and errors of a game started with godot_run_start (process or editor mode). Use level "error" to see only errors, and "since" (the "next" value from the last call) to page.',
   input: z.object({
-    run_id: z.string().optional().describe('Defaults to the latest run.'),
+    run_id: z.string().optional().describe('Default: the running game (latest run). "editor" for the editor\'s.'),
     since: z.number().int().min(0).default(0),
     limit: z.number().int().min(1).max(2000).default(200),
     level: z.enum(['all', 'warning', 'error']).default('all'),
@@ -195,7 +196,18 @@ export const runOutput = defineOp({
   idempotent: true,
   core: true,
   async run({ run_id, since, limit, level, errors }, ctx) {
-    const run = ctx.runs.get(run_id);
+    const run = run_id === 'editor' ? undefined : ctx.runs.get(run_id);
+    // A game started from the editor writes to the editor's Output panel, which plugins
+    // can't read, so its runtime keeps a copy (runtime/ops/rt_output.gd). Use it when asked
+    // for run_id "editor", or by default when no process run of ours is running.
+    if (run_id === 'editor' || (!run_id && !run?.running)) {
+      const editorGame = await resolveGame(ctx, 'editor').catch(() => undefined);
+      if (editorGame) {
+        const page = (await editorGame.channel.request('rt.output', { since, limit, level, errors: errors ?? false })) as Record<string, unknown>;
+        return { data: { run_id: 'editor', running: true, ...page } };
+      }
+      if (run_id === 'editor') throw new OpError('GAME_NOT_RUNNING', 'No game started from the editor is running (or its runtime has not loaded yet).');
+    }
     if (!run) {
       throw new OpError('NOT_FOUND', run_id ? `No run with id "${run_id}".` : 'No game has been started by this server yet. Use godot_run_start (mode "process" to capture output).');
     }
