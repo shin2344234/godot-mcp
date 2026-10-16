@@ -51,11 +51,11 @@ export const gameScreenshot = defineOp({
   input: z.object({
     run_id: runId,
     source: z.enum(['game', 'editor_2d', 'editor_3d']).default('game'),
-    node: z.string().optional().describe('Viewport, SubViewportContainer, or a node inside a viewport.'),
+    node: z.string().optional().describe('Node to frame (crop to its screen rect), or a viewport.'),
     region: z
       .object({ x: z.number().int(), y: z.number().int(), w: z.number().int().min(1), h: z.number().int().min(1) })
       .optional()
-      .describe('Crop, in viewport pixels.'),
+      .describe('Crop, in image px (window px with stretch).'),
     max_size: z.number().int().min(16).max(4096).default(768).describe('Longest side, px.'),
     format: z.enum(['png', 'jpg']).default('png'),
     quality: z.number().min(0.01).max(1).optional().describe('JPEG; default 0.85.'),

@@ -48,6 +48,10 @@ func move_box(where: Vector2) -> Vector2:
 	return where
 
 
+func get_double_clicks() -> int:
+	return clicks * 2
+
+
 func slow_double(x: int) -> int:
 	await get_tree().create_timer(0.2).timeout
 	return x * 2
@@ -172,6 +176,17 @@ describe.skipIf(!enabled)('live game: process run', () => {
     expect(typeof autoload.properties.score).toBe('number');
     const typo = errorText(await call('godot_game_get', { path: 'Box', properties: ['positon'] }));
     expect(typo).toMatch(/NOT_FOUND: .*no property 'positon'.*position/);
+    // Derived values through argument-less getters: engine const methods and get_/is_
+    // named script methods.
+    const getters = json(await call('godot_game_get', { path: 'Box', properties: ['get_global_rect()', 'is_visible_in_tree()'] }));
+    expect(getters.properties['get_global_rect()']).toMatch(/^Rect2\(10, 20, /);
+    expect(getters.properties['is_visible_in_tree()']).toBe(true);
+    expect(json(await call('godot_game_get', { properties: ['get_double_clicks()'] })).properties).toEqual({ 'get_double_clicks()': 0 });
+    expect(errorText(await call('godot_game_get', { path: 'Box', properties: ['is_visible_in_tree'] }))).toMatch(/is a method: write "is_visible_in_tree\(\)"/);
+    expect(errorText(await call('godot_game_get', { path: 'Box', properties: ['nope'] }))).toMatch(/argument-less getters, e\.g\. "get_screen_center_position\(\)"/);
+    expect(errorText(await call('godot_game_get', { properties: ['greet()'] }))).toMatch(/BAD_PARAMS: 'greet\(\)' needs 1 argument/);
+    expect(errorText(await call('godot_game_get', { properties: ['queue_free()'] }))).toMatch(/BAD_PARAMS: 'queue_free\(\)' is not a getter/);
+    expect(errorText(await call('godot_game_get', { properties: ['get_nope()'] }))).toMatch(/NOT_FOUND: .*no method 'get_nope'/);
     const missing = errorText(await call('godot_game_get', { path: 'Nope' }));
     expect(missing).toMatch(/NOT_FOUND: No node at 'Nope'.*godot_game_tree/);
   }, 30_000);
@@ -248,6 +263,10 @@ describe.skipIf(!enabled)('live game: process run', () => {
     expect(boom).toMatch(/GODOT_ERROR: The snippet stopped with a script error: .*'missing'.*\(snippet:3\)/);
     expect(boom).toContain('"output":["before"]');
     expect(json(await call('godot_game_eval', { code: '1 + 1' })).result).toBe(2);
+    // Autoloads and engine singletons are visible by name in expressions; inputs win.
+    expect(typeof json(await call('godot_game_eval', { code: 'GameState.score' })).result).toBe('number');
+    expect(json(await call('godot_game_eval', { code: 'Engine.get_physics_ticks_per_second()' })).result).toBe(60);
+    expect(json(await call('godot_game_eval', { code: 'GameState', inputs: { GameState: 5 } })).result).toBe(5);
   }, 30_000);
 
   it('changes and reloads the scene', async () => {
@@ -262,8 +281,16 @@ describe.skipIf(!enabled)('live game: process run', () => {
     );
     expect(r.results[0]).toEqual({ action: 'change_scene', current_scene: 'res://main.tscn' });
     expect(r.results[1].path).toBe('Label');
+    // The reply says the current scene is a different instance than at the previous call.
+    expect(r.scene_changed).toBe('res://main.tscn');
     const tree = json(await call('godot_game_tree', { name: 'label' }));
     expect(tree.nodes).toEqual([expect.objectContaining({ path: 'Label', text: 'Score: 0' })]); // reloaded
+    expect(tree.scene_changed).toBeUndefined();
+    // A reload the game does by itself (game over -> level restarts) is flagged on the next call.
+    await call('godot_game_eval', { mode: 'gdscript', code: 'tree.reload_current_scene.call_deferred()\nreturn 1' });
+    await new Promise((r) => setTimeout(r, 300));
+    const after = json(await call('godot_game_get', { path: 'Label', properties: ['text'] }));
+    expect(after).toMatchObject({ scene_changed: 'res://main.tscn', properties: { text: 'Score: 0' } });
   }, 30_000);
 });
 

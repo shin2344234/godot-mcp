@@ -50,7 +50,7 @@ const step = z.object({
   key: z.string().optional().describe('"Space", "A", "Left", "Escape", "Ctrl+S"'),
   action: z.string().optional().describe('InputMap action.'),
   phase: z.enum(['tap', 'press', 'release']).optional(),
-  at: pos.optional().describe('[x,y] viewport px, or node path (its center).'),
+  at: pos.optional().describe('[x,y] game (viewport) px, or node path (its center).'),
   to: pos.optional().describe('drag/touch end.'),
   button: z.union([z.string(), z.number()]).optional().describe('Mouse left/right/middle; scroll up/down/left/right; joypad a/b/x/y/start/dpad_up...'),
   double: z.boolean().optional(),
@@ -78,7 +78,7 @@ export const gameInput = defineOp({
   group: 'game',
   title: 'Send input to game',
   description:
-    'Godot game: send input steps in order (keys, actions, clicks on positions or nodes, drags, scroll, typing, joypad, touch, waits). Reports which Control each click hit.',
+    'Godot game: send input steps in order (keys, actions, clicks on positions or nodes, drags, scroll, typing, joypad, touch, waits). Reports the Control and physics object under each click.',
   input: z.object({ steps: z.array(step).min(1).max(200), run_id: runId }),
   readOnly: false,
   destructive: false,
@@ -90,7 +90,13 @@ export const gameInput = defineOp({
 // ---------------------------------------------------------------------------
 
 /**
- * Suspend or resume the whole game (what the editor's Pause button does).
+ * Suspend or resume the whole game: what the editor's Game view "Suspend" toggle (F9)
+ * sends (editor/run/game_view_plugin.cpp). SceneTree::set_suspend stops every node
+ * (Node::can_process() is false while suspended, whatever its process_mode), deactivates
+ * the physics servers and freezes Engine.time_scale (reads 0). It does NOT set
+ * SceneTree.paused (the game's own pause state) and does not stop the main loop: the
+ * engine keeps iterating, so Engine.get_process_frames()/get_physics_frames() keep
+ * counting while nothing in the game moves.
  *
  * SceneDebugger's suspend handler also recomputes the game's input state:
  * input is disabled while suspended OR while RuntimeNodeSelect's "node select
@@ -136,10 +142,11 @@ export const gameTime = defineOp({
   group: 'game',
   title: 'Game time control',
   description:
-    'Godot game: pause/resume the whole game (like the editor Pause button), step frames, set speed, or wait for a node, signal, condition, frames or seconds.',
+    'Godot game: pause/resume the whole game (Godot\'s suspend: no node processes; SceneTree.paused untouched), step frames or physics ticks, set speed, or wait for a node, signal, condition, frames or seconds.',
   input: z.object({
     action: z.enum(['state', 'pause', 'resume', 'step', 'speed', 'wait_for']),
     frames: z.number().int().min(1).max(10_000).optional().describe('step: frames to advance (default 1); wait_for: frames.'),
+    physics_ticks: z.number().int().min(1).max(MAX_STEP_FRAMES).optional().describe('step: exactly N physics ticks instead.'),
     scale: z.number().min(0.01).max(100).optional().describe('speed: 1 = normal.'),
     node: z.string().optional().describe('wait_for: node to appear; signal emitter; condition base.'),
     signal: z.string().optional(),
@@ -167,20 +174,41 @@ export const gameTime = defineOp({
         return { data: await timeState(game, ctx) };
       }
       case 'step': {
-        const frames = args.frames ?? 1;
-        if (frames > MAX_STEP_FRAMES) throw new OpError('BAD_PARAMS', `step advances at most ${MAX_STEP_FRAMES} frames per call (got ${frames}). For longer spans resume and use wait_for frames/seconds, then pause again.`);
+        // Two units: `frames` = main-loop iterations (each runs 0..n physics ticks, then
+        // one process frame and a draw), `physics_ticks` = exactly that many physics ticks.
+        // One frame is NOT one tick: at ~30 fps (software rendering) and 60 ticks/s a frame
+        // runs ~2 ticks, so frame stepping could never advance a single physics tick.
+        const ticks = args.physics_ticks;
+        const count = ticks ?? args.frames ?? 1;
+        if (count > MAX_STEP_FRAMES) {
+          throw new OpError('BAD_PARAMS', `step advances at most ${MAX_STEP_FRAMES} ${ticks ? 'physics ticks' : 'frames'} per call (got ${count}). For longer spans resume and use wait_for frames/seconds, then pause again.`);
+        }
         // Stepping needs the suspended state; pause first if the game is running.
         const before = await timeState(game, ctx);
         if (!before.suspended) await setSuspended(game, true);
-        let stepped = 0;
-        for (let i = 0; i < frames; i++) {
-          // Messages are handled in order: the game un-suspends, then our request
-          // waits until SceneDebugger has suspended it again after one frame.
+        const stepped = { frames: 0, physics_ticks: 0 };
+        // Tick mode: each iteration runs at most one tick (the runtime caps it), but may run
+        // none when frames are faster than ticks, so iterate until enough ticks have run.
+        // The bound only guards against a game whose physics never ticks.
+        const maxIterations = ticks ? ticks * 4 + 20 : count;
+        for (let i = 0; i < maxIterations && (ticks ? stepped.physics_ticks < ticks : i < count); i++) {
+          // The runtime request goes first, so it is normally already waiting when Godot's
+          // scene:next_frame un-suspends the game for one iteration (time.step_wait copes
+          // with the other order too); it answers once SceneDebugger has suspended the
+          // game again, with what that iteration actually ran.
+          const wait = ch.request('time.step_wait', ticks ? { ticks: true } : {}, { timeoutMs: 10_000, signal: ctx.signal });
+          wait.catch(() => undefined); // awaited below; avoids an unhandled rejection if native() throws first
           await ch.native('scene:next_frame');
-          const r = (await ch.request('time.step_wait', {}, { timeoutMs: 10_000, signal: ctx.signal })) as { frames: number };
-          stepped += r.frames > 0 ? 1 : 0;
+          const r = (await wait) as { frames: number; physics_ticks: number };
+          stepped.frames += r.frames;
+          stepped.physics_ticks += r.physics_ticks;
         }
-        return { data: { stepped, ...(before.suspended ? {} : { paused_first: true }), ...(await timeState(game, ctx)) } };
+        const state = await timeState(game, ctx);
+        // The engine's total frame counters keep counting while suspended (the main loop
+        // runs on, only the nodes stop), so they say nothing about the step; `stepped` does.
+        delete state.frames;
+        delete state.physics_frames;
+        return { data: { stepped, ...(before.suspended ? {} : { paused_first: true }), ...state } };
       }
       case 'wait_for': {
         const { node, signal, condition, frames, seconds, timeout_ms } = args;

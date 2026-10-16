@@ -29,6 +29,17 @@ content scale) before sending, because `Input.parse_input_event` expects window
 coordinates and `Viewport._make_input_local` applies the inverse. Results include
 `viewport: [w, h]`; a node outside it, or inside a SubViewport, gets a `note`.
 
+**Two coordinate spaces with a stretch mode.** With `display/window/stretch/mode` set, the
+game's coordinates are not window pixels: a 640x360 game shown in a 1280x720 window takes
+`at` in 640x360 (what nodes see), while `godot_game_screenshot` captures the window at
+1280x720 (stretch mode `canvas_items`; verified with 4.7.2 under Xvfb) and its `region` /
+`changed_rect` are in those image pixels. So that the two aren't mixed up, input results
+then also carry `window: [1280, 720]` next to `viewport`, and screenshot results carry
+`source.game_size`. To capture something found with `godot_game_tree`, pass it as the
+screenshot's `node` (it is framed for you) instead of converting a rect by hand. `region`
+stays in image pixels on purpose: it is an exact pixel crop of the returned image, and
+`changed_rect` (also image pixels) can be passed back as `region` unchanged.
+
 **Mouse position in a window.** In a windowed game `Viewport.get_mouse_position()` is not
 taken from events: Godot computes it from the real OS pointer
 (`DisplayServer.mouse_get_position()`, `scene/main/viewport.cpp`). So before every injected
@@ -53,17 +64,42 @@ before the first one runs. Step fields:
 
 | type | fields | what it does |
 |---|---|---|
-| `key` | `key` ("Space", "A", "Left", "Escape", "F1", "Ctrl+S"), `phase`, `ms` | key with keycode, physical keycode and key label set (project input maps usually bind physical keys); printable keys carry `unicode`; `Ctrl+S` presses Ctrl, then S, releases in reverse |
-| `action` | `action`, `phase`, `value` (strength 0..1), `ms` | `InputEventAction`: updates `Input.is_action_*` and reaches `_input`/`_unhandled_input` |
-| `move` | `at` | mouse motion; reports `hovered` |
-| `click` | `at`, `button` (left/right/middle/x1/x2), `double`, `phase`, `ms` | hover, then press/release; reports `hit` (the Control under the cursor, `Viewport.gui_get_hovered_control()`), `handled` (`Viewport.is_input_handled()` after the press) and, for node targets, `hit_target` (false when something else, e.g. an overlay, got it) |
+| `key` | `key` ("Space", "A", "Left", "Escape", "F1", "Ctrl+S"), `phase`, `ms` | key with keycode, physical keycode and key label set (project input maps usually bind physical keys); printable keys carry `unicode`; `Ctrl+S` presses Ctrl, then S, releases in reverse. Reports `actions`: the InputMap actions the key triggers (`InputMap.event_is_action`, project actions first, e.g. `["jump", "ui_accept", "ui_select"]` for Space) |
+| `action` | `action`, `phase`, `value` (strength 0..1), `ms` | `InputEventAction`: updates `Input.is_action_*` and reaches `_input`/`_unhandled_input`; reports `pressed` (`Input.is_action_pressed` right after) |
+| `move` | `at` | mouse motion; reports `hovered` (Control) and `physics` (see below) |
+| `click` | `at`, `button` (left/right/middle/x1/x2), `double`, `phase`, `ms` | hover, then press/release; reports `hit` (the Control under the cursor, `Viewport.gui_get_hovered_control()`), `physics` (see below) and, for node targets, `hit_target` (false when something else, e.g. an overlay, got it) |
 | `drag` | `at`, `to`, `button`, `ms` (default 300), `steps` (default 10) | press, `steps` motions with the button held, release; reports `hit` and `released_on` |
 | `scroll` | `at`?, `button` (up/down/left/right, default down), `value` (clicks, default 1) | wheel press+release per click |
 | `text` | `text` | types into the focused Control: one key event per character with `unicode` (ASCII letters/digits/space also get a keycode); `\n` = Enter, `\t` = Tab. Reports `focus` and the control's `text`; warns when nothing has focus (click the field first) |
-| `joy_button` | `button` (a, b, x, y, back, guide, start, left_stick, right_stick, left_shoulder, right_shoulder, dpad_up/down/left/right, or 0-127), `device`, `phase`, `ms` | `InputEventJoypadButton` |
+| `joy_button` | `button` (a, b, x, y, back, guide, start, left_stick, right_stick, left_shoulder, right_shoulder, dpad_up/down/left/right, or 0-127), `device`, `phase`, `ms` | `InputEventJoypadButton`; reports `actions` like `key` |
 | `joy_axis` | `axis` (left_x, left_y, right_x, right_y, trigger_left, trigger_right, or a number), `value` (-1..1), `device`, `ms` | sets the axis; with `ms`, holds it that long and returns it to 0 |
 | `touch` | `at`, `to`?, `device` (finger index), `phase`, `ms`, `steps` | screen touch tap, or a drag with `to`. By default Godot also emulates a mouse click from it (`input_devices/pointing/emulate_mouse_from_touch`) |
 | `wait` | `ms` and/or `frames` | real-time wait (max 120 s) / process frames |
+
+**`handled`** (key, action, click, joy_button) appears, as `true`, only when a node marked the
+event as handled (`Viewport.is_input_handled()` right after delivery): the GUI consumed it
+(a Button click, a Control with `mouse_filter` Stop, a focused LineEdit taking a key) or a
+script called `get_viewport().set_input_as_handled()`. Games that poll `Input` in
+`_process`/`_physics_process` never mark events, so its absence is **not** a failure; earlier
+versions reported `handled: false` on every such step, which read like one. `actions` /
+`pressed` are what confirm that a key or action reached the game's input state.
+
+**`physics`** (click, move): the `CollisionObject2D`/`3D` nodes under the pointer, because
+`hit`/`hovered` only know Controls; omitted when there is none. 2D works like Godot's own
+physics picking (`Viewport._process_picking`, `scene/main/viewport.cpp`): the position goes
+through the inverse canvas transform (so Camera2D zoom and offset are undone) and
+`PhysicsDirectSpaceState2D.intersect_point()` is asked once for the viewport's own canvas and
+once per `CanvasLayer` with that layer's transform (the physics server only matches objects
+whose canvas id equals the query's). Bodies and areas are both reported, `input_pickable` or
+not: this says what is there, not who receives `input_event`. 3D: a ray from the current
+Camera3D through the position (first collider). At most 4 paths. Verified in a stretched
+640x360 game with a zoomed Camera2D: a click at a StaticBody2D's node path reports it, and a
+position over an Area2D in a CanvasLayer reports that one. For clicks the lookup happens
+before the press, and `hit` / `hit_target` are captured right after the press is delivered:
+a click on a "Play again" button that reloads the scene used to report `hit: ""` because the
+button was freed by the time the step result was built. When the hover state reads empty
+right after the press (Viewport can drop it with a deferred call), the Control hovered just
+before the press is reported.
 
 **Paused game.** While the game is suspended (`godot_game_time pause`), Godot disables the
 root viewport's input and no node processes, so events are **dropped, not queued**: stepping
@@ -85,7 +121,9 @@ held across steps, e.g. `press move_right`, `wait 500`, `release move_right`). `
 is the hold time. Waits and holds are **real time** (a `SceneTreeTimer` with
 `ignore_time_scale`), so they don't stretch under `speed` or freeze while paused.
 
-Result: `{ "steps": [{ "type", ...per-type fields }], "elapsed_ms", "frames", "viewport", "warnings"? }`.
+Result: `{ "steps": [{ "type", ...per-type fields }], "elapsed_ms", "frames", "viewport", "window"?, "warnings"?, "scene_changed"? }`
+(`window` only when it differs from `viewport`, see "Coordinates"; `scene_changed` is
+explained in [runtime-protocol.md](../runtime-protocol.md), section 4).
 An error names the failing step (`steps[2] (click): No node at 'Nope' ...`) and lists the
 completed steps in `data.completed`. An unknown action lists the project's actions.
 
@@ -120,14 +158,22 @@ a shift-click).
 |---|---|---|
 | `state` | runtime `time.state` | `suspended`, `tree_paused`, `speed`, `game_time_scale`, `effective_time_scale`, `frames`, `physics_frames` |
 | `pause` / `resume` | Godot's `scene:suspend_changed [bool]` | state |
-| `step` | `scene:next_frame` + runtime `time.step_wait`, `frames` times (default 1, max 300) | `stepped`, `paused_first`?, state |
+| `step` | runtime `time.step_wait` + `scene:next_frame` per frame; `frames` (default 1) or `physics_ticks`, max 300 | `stepped: {frames, physics_ticks}`, `paused_first`?, state without `frames`/`physics_frames` |
 | `speed` | `scene:speed_changed [scale]` (0.01..100) | state |
 | `wait_for` | runtime `time.wait_for` | `elapsed_ms`, `frames`, plus `args` / `value` / `node` |
 
 **pause = suspend, not `SceneTree.paused`.** `scene:suspend_changed` calls
-`SceneTree.set_suspend()`, the editor's Pause button: no node processes (whatever its
-`process_mode`, so pause menus and `PROCESS_MODE_ALWAYS` nodes stop too), physics stops,
-`Engine.time_scale` is frozen (reads 0) and input is disabled. `SceneTree.paused` is game
+`SceneTree.set_suspend()`, which is what the editor's Game view "Suspend" toggle (F9) sends
+(`editor/run/game_view_plugin.cpp`): no node processes (`Node.can_process()` is false while
+suspended, whatever its `process_mode`, so pause menus and `PROCESS_MODE_ALWAYS` nodes stop
+too), the physics servers are deactivated, `Engine.time_scale` is frozen (reads 0) and input
+is disabled. (The tool description used to say "like the editor Pause button"; the
+debugger's Pause button is something else, a script break.) What suspension does **not**
+stop is the main loop: Godot keeps iterating, so `Engine.get_process_frames()` /
+`get_physics_frames()` (the `frames` / `physics_frames` of `state`) keep counting while
+nothing in the game moves. That is why `step` results leave them out and report what the
+step ran instead. The e2e tests check that `_process` and `_physics_process` counters stay
+put while suspended. `SceneTree.paused` is game
 state: the game's own pause menu sets and reads it, so changing it would fight the game and
 resuming could unpause a game the player had paused. Suspension leaves it alone (reported
 as `tree_paused`) and is the only one Godot can step frame by frame. Notes: the game cannot
@@ -147,13 +193,34 @@ stopped reaching Controls). Editor runs keep the mode chosen in the Game view (i
 button also stays unaware of an MCP pause).
 
 **step**: if the game is running it is paused first (`paused_first: true`). Godot's
-`scene:next_frame` un-suspends and re-suspends on `RenderingServer.frame_post_draw`. A
-headless game never draws (`DisplayServerHeadless.can_any_window_draw()` is false, so
-`Main::iteration` skips `RenderingServer.draw`) and would never be suspended again, so in
-headless runs `time.step_wait` adds an internal helper node that runs last in the next
-frame's `_process` (highest `process_priority`) and calls `RenderingServer.force_draw()`,
-which emits `frame_post_draw`. Verified: N steps advance `_process` exactly N times, headless
-and windowed (Xvfb).
+`scene:next_frame` un-suspends and re-suspends on `RenderingServer.frame_post_draw`, i.e.
+for exactly one main-loop iteration. A headless game never draws
+(`DisplayServerHeadless.can_any_window_draw()` is false, so `Main::iteration` skips
+`RenderingServer.draw`) and would never be suspended again, so in headless runs
+`time.step_wait` adds an internal helper node that runs last in the stepped frame's
+`_process` (highest `process_priority`) and calls `RenderingServer.force_draw()`, which emits
+`frame_post_draw`. The server sends `time.step_wait` first and `scene:next_frame` right
+after; the runtime counts frames and ticks with `process_frame` / `physics_frame` callbacks
+that only count while the tree is not suspended, so the result is right whichever of the two
+messages the game handles first (in the e2e tests it was occasionally next_frame).
+Verified: N frame steps advance `_process` exactly N times, headless and windowed (Xvfb).
+
+**Frames are not physics ticks.** One iteration (`Main::iteration`, `main/main.cpp`) first
+runs 0..n physics ticks, as many as the real time since the previous iteration covers (the
+main loop keeps iterating while suspended), then one process frame and the draw. A game
+drawing ~30 fps with 60 ticks/s (software rendering) runs about 2 ticks per frame, so
+`frames: 1` could advance physics twice; a light or headless game drawing faster than 60 fps
+often runs none (seen under Xvfb: `frames: 1` steps with `physics_ticks: 0`). `stepped`
+reports both numbers for what really ran. `physics_ticks: N` steps exactly N ticks: for each
+step the runtime sets `Engine.max_physics_steps_per_frame = 1` (read at the start of every
+iteration; the tick count is clamped to it and the process delta shortened to match) and
+caps `Engine.max_fps` at the tick rate to avoid empty iterations, and the server repeats
+steps until N ticks have run (each also runs a process frame, so `stepped.frames` can exceed
+N). Both settings are restored while the game is suspended again, so the game never runs
+with them. Verified: `physics_ticks: 1` advances a `_physics_process` counter by exactly 1,
+headless and windowed. With `speed` above 1 Godot allows `speed` times as many ticks per
+iteration (`Engine::_update_time_scale`), so a step can then run more than N; `stepped` shows
+it.
 
 **speed** sets Godot's *user* time scale (`Engine.set_user_time_scale`, the editor's speed
 menu), which multiplies the game's own `Engine.time_scale` and also scales physics ticks per
@@ -165,13 +232,20 @@ suspended).
 
 - `node`: until a node exists at that path (returns its `node` path and `type`);
 - `signal` (+ `node` = emitter, default the scene root): until it is emitted; returns `args`
-  encoded like other runtime values. An unknown signal lists the node's signals;
+  encoded like other runtime values. An unknown signal lists the node's signals. If the
+  emitter is freed before it emits, the result is `{ "freed": true, "node" }`;
 - `condition` (+ `node` = base, default the scene root): a Godot `Expression` evaluated on
   the base node until truthy; returns `value`. Executed with `const_calls_only = true`:
   properties and const methods (`get_node('Player').position.x > 300`, `is_visible()`)
-  work, calls that change state (`queue_free()`) fail; engine singletons are not reachable
-  from an Expression. A parse error or a failure on the first evaluation is reported at once;
-  later failures (e.g. the node despawned) keep waiting and are shown on timeout. Tip: a
+  work, calls that change state (`queue_free()`) fail. Autoloads and engine singletons
+  named in the condition (`GameState.lives == 0`, `Input.is_action_pressed('jump')`) are
+  passed in as Expression inputs, since an Expression can't see globals by itself (as in
+  `godot_game_eval`, see [live-game.md](live-game.md)). If the base node is freed while
+  waiting (an enemy that `queue_free()`s itself while its `_dying` flag is watched), the
+  result is `{ "freed": true, "node", "value": <last value> }` rather than an error: the
+  condition can't become true any more, and that is an answer. A parse error or a failure
+  on the first evaluation is reported at once; later failures (e.g. a node the expression
+  looks up despawned) keep waiting and are shown on timeout. Tip: a
   one-element array is always truthy, so `condition: "[get_node('Player').health]"` reads a
   value immediately;
 - `frames`: N process frames;
@@ -179,7 +253,15 @@ suspended).
   `SceneTree.paused`, scales with the time scale and stops while suspended).
 
 The wait is a coroutine in the runtime: other requests (input, reads) are served while it
-waits, so an agent can start a wait and then trigger the event. Timeouts return `TIMEOUT`
+waits, so an agent can start a wait and then trigger the event. The `wait_for` call itself
+returns only when it is done, and it is not a `godot_game_input` step, so "hold a key until
+something happens" takes three calls: `godot_game_input` with
+`[{type: "action", action: "move_right", phase: "press"}]`, then `godot_game_time wait_for`
+(e.g. `condition: "get_node('Player').position.x > 300"`), then `godot_game_input` with
+`phase: "release"`. The key stays held between the calls. (A client that runs tool calls in
+parallel can also start the wait first and send input while it waits.) Timeouts are real
+time while the game runs at its own pace: a game drawing 30 fps under software rendering
+needs a longer `timeout_ms` than the same game at 60 fps. Timeouts return `TIMEOUT`
 saying what didn't happen (and that the game is paused, if it is). The server's reply
 timeout is `timeout_ms` + 5 s.
 

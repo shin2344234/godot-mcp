@@ -63,7 +63,7 @@ export const gameGet = defineOp({
   input: z.object({
     run_id: runId,
     path,
-    properties: z.array(z.string()).optional().describe('Only these; ["*"] = all incl. defaults.'),
+    properties: z.array(z.string()).optional().describe('Only these; "get_x()" calls a getter; ["*"] = all incl. defaults.'),
     signals: z.boolean().optional(),
     methods: z.boolean().optional(),
   }),
@@ -109,7 +109,7 @@ export const gameEval = defineOp({
   group: 'game',
   title: 'Evaluate code in game',
   description:
-    'Godot game: evaluate code in the running game: an Expression with self = node (default), or a GDScript body of func run(node, tree, inputs) (use return). Off unless the server runs with --allow-eval.',
+    'Godot game: evaluate code in the running game: an Expression with self = node (default; autoloads and singletons by name), or a GDScript body of func run(node, tree, inputs) (use return). Off unless the server runs with --allow-eval.',
   input: z.object({
     run_id: runId,
     code: z.string(),

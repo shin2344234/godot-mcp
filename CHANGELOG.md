@@ -40,8 +40,10 @@ Needs Godot 4.7 or newer (tested with 4.7.2).
 - **Offline docs**: search the class reference of the installed Godot version.
 - **Running the game**: start and stop runs, read output and errors with script stacks.
 - **Live game tools**: live scene tree, read and edit nodes, input (keys, mouse, touch,
-  actions), pause and frame stepping, input recording and replay, screenshots (also of
-  the editor's 2D/3D views), performance monitors and a script profiler.
+  actions; clicks report the Control and physics object hit), pause and stepping by
+  frames or exact physics ticks, input recording and replay, screenshots (of the window,
+  a node framed on screen, or the editor's 2D/3D views), performance monitors and a
+  script profiler.
   `godot_game_eval` is off unless the server runs with `--allow-eval`.
 - **Debugging**: breakpoints, stepping, call stack, variables and expression evaluation
   on games the server starts.

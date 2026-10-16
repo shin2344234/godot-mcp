@@ -267,7 +267,8 @@ static func get_node_info(rt: Node, params: Dictionary) -> Dictionary:
 	var everything: bool = wanted.size() == 1 and str(wanted[0]) == "*"
 	if p.has("properties") and not everything:
 		for w: Variant in wanted:
-			var r: Dictionary = _read_path(rt, node, str(w))
+			var wname: String = str(w).strip_edges()
+			var r: Dictionary = _call_getter(rt, node, wname) if wname.ends_with("()") else _read_path(rt, node, wname)
 			if R.is_err(r):
 				return r
 			props[str(w)] = rt.encode(r["value"])
@@ -318,6 +319,46 @@ static func _is_class_default(node: Node, pname: String, v: Variant) -> bool:
 	return typeof(v) == typeof(default) and v == default
 
 
+## Prefixes that mark a non-const method as a getter (script methods are never flagged
+## const, so `get_health()` in a script is only recognised by its name).
+const GETTER_PREFIXES: Array[String] = ["get_", "is_", "has_", "can_"]
+
+
+## Reads a derived value through an argument-less getter: "get_screen_center_position()",
+## "is_playing()". Values like these exist only as methods, and reading them needed
+## godot_game_eval (off by default). To keep game.get read-only in spirit, only methods
+## that need no arguments and are either const in the engine (METHOD_FLAG_CONST: Camera2D,
+## AnimationPlayer... getters) or named like a getter (get_/is_/has_/can_, which covers
+## script methods) are called. A coroutine's result is not awaited (encoded as is).
+static func _call_getter(rt: Node, node: Node, entry: String) -> Dictionary:
+	var mname: String = entry.trim_suffix("()").strip_edges()
+	var info: Dictionary = {}
+	for m: Dictionary in node.get_method_list():
+		if m["name"] == mname:
+			info = m
+			break
+	if info.is_empty():
+		return R.err(R.NOT_FOUND, "Node '%s' (%s) has no method '%s'.%s" % [rt.path_of(node), node.get_class(), mname, _similar_methods(node, mname)])
+	var required: int = (info["args"] as Array).size() - (info["default_args"] as Array).size()
+	if required > 0:
+		return R.err(R.BAD_PARAMS, "'%s()' needs %d argument(s), so game.get can't call it. Use godot_game_edit {action: \"call\", method: \"%s\", args: [...]}." % [mname, required, mname])
+	var is_const: bool = (int(info["flags"]) & METHOD_FLAG_CONST) != 0
+	var getter_name: bool = GETTER_PREFIXES.any(func(pre: String) -> bool: return mname.begins_with(pre))
+	if not is_const and not getter_name:
+		return R.err(R.BAD_PARAMS, "'%s()' is not a getter (not const, and not named get_/is_/has_/can_), and game.get only reads. To run it, use godot_game_edit {action: \"call\", method: \"%s\"}." % [mname, mname])
+	return R.value(node.call(mname))
+
+
+static func _similar_methods(node: Node, mname: String) -> String:
+	var names: Array[String] = []
+	for m: Dictionary in node.get_method_list():
+		var n: String = m["name"]
+		if not n.begins_with("_") and not names.has(n):
+			names.append(n)
+	var similar: Array[String] = Fuzzy.suggest(mname, names, 8)
+	return (" Similar methods: %s." % ", ".join(similar)) if not similar.is_empty() else ""
+
+
 ## Reads a property or a nested path ("material:albedo_color", "position:x") without
 ## risking a runtime error. Returns {"value": v} or an error naming valid names.
 static func _read_path(rt: Node, node: Node, pname: String) -> Dictionary:
@@ -329,7 +370,18 @@ static func _read_path(rt: Node, node: Node, pname: String) -> Dictionary:
 	for i: int in parts.size():
 		var part: String = parts[i]
 		if Codec.find_property(obj, part).is_empty():
-			return Codec.unknown_property_error(obj, part, _label(rt, node, obj, walked))
+			var e: Dictionary = Codec.unknown_property_error(obj, part, _label(rt, node, obj, walked))
+			# The codec's generic advice names the editor tool; in a running game, say what
+			# works here, and point out argument-less getters (the agent asked for
+			# "is_playing", a method, and only learned that it wasn't a property).
+			var err: Dictionary = e["error"]
+			var msg: String = str(err["message"]).replace(" Use node.get to list all properties and their current values.", "")
+			if i == 0 and obj.has_method(part):
+				msg += " '%s' is a method: write \"%s()\" to read what it returns (argument-less getters only)." % [part, part]
+			else:
+				msg += " Omit 'properties' to list them; derived values can be read with argument-less getters, e.g. \"get_screen_center_position()\"."
+			err["message"] = msg
+			return e
 		var v: Variant = obj.get(part)
 		walked = part if walked.is_empty() else walked + ":" + part
 		if i == parts.size() - 1:
@@ -852,13 +904,14 @@ static func eval_code(rt: Node, params: Dictionary) -> Dictionary:
 
 static func _eval_expression(rt: Node, node: Node, code: String, inputs: Dictionary) -> Dictionary:
 	var expr := Expression.new()
-	var names: PackedStringArray = []
-	for k: String in inputs:
-		names.append(k)
+	# The caller's inputs plus every autoload / engine singleton the code names (GameState,
+	# Input, Engine...), which an Expression can't see by itself (rt.expression_globals).
+	var globals: Array = rt.expression_globals(code, inputs)
+	var names: PackedStringArray = globals[0]
 	if expr.parse(code, names) != OK:
 		return R.err(R.BAD_PARAMS, ("Expression parse error: %s Expression mode takes ONE expression, e.g. " +
 			"`get_node(\"Player\").position` or `score * 2` (self = the node at 'path'); use mode \"gdscript\" for statements.") % _sentence(expr.get_error_text()))
-	var ret: Variant = expr.execute(inputs.values(), node, false)
+	var ret: Variant = expr.execute(globals[1], node, false)
 	if expr.has_execute_failed():
 		return R.err(R.GODOT_ERROR, "Expression failed: %s (self is %s %s; check method names and argument types with godot_game_get)." %
 			[expr.get_error_text(), rt.path_of(node), node.get_class()])
