@@ -1,7 +1,7 @@
 {
   "name": "godot-mcp",
   "displayName": "Godot MCP",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Work on Godot 4 projects: edit scenes, nodes and scripts, run the game and read its errors, drive the running game, and look up the offline class reference. Bundles the godot-mcp server and a Godot workflow skill.",
   "author": {
     "name": "shin2344234",

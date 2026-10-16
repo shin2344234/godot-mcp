@@ -37,8 +37,12 @@ export function runProcess(file: string, args: string[], opts: { cwd?: string; t
     let stdout = '';
     let stderr = '';
     let timedOut = false;
-    child.stdout.on('data', (d: Buffer) => (stdout += d.toString('utf8')));
-    child.stderr.on('data', (d: Buffer) => (stderr += d.toString('utf8')));
+    // setEncoding: decode UTF-8 across chunk boundaries (a character split between two
+    // chunks was decoded as two U+FFFD replacement characters; Codex review of 0.1.0).
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (d: string) => (stdout += d));
+    child.stderr.on('data', (d: string) => (stderr += d));
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill('SIGKILL');

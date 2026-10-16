@@ -335,12 +335,17 @@ export const editorLaunch = defineOp({
     if (headless || !canShowWindow()) args.unshift('--headless');
     // Detached: the editor should outlive this server process.
     const child = spawn(godot.path, args, { detached: true, stdio: 'ignore', windowsHide: false });
+    // A process that can't be started emits 'error'; unhandled, that event would crash the
+    // whole server (same class of bug as GameRun's, found in the Codex review of 0.1.0).
+    let spawnError: Error | undefined;
+    child.on('error', (err) => (spawnError = err));
     child.unref();
     log.info(`Launched editor pid ${child.pid}`);
 
     const deadline = Date.now() + wait_seconds * 1000;
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 1000));
+      if (spawnError) throw new OpError('GODOT_NOT_FOUND', `Could not start the Godot editor (${godot.path}): ${spawnError.message}. ${GODOT_NOT_FOUND_HINT}`);
       if (await ctx.bridge.ensureConnected()) return { data: { launched: true, pid: child.pid, editor: ctx.bridge.info } };
     }
     return {

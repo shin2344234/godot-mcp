@@ -261,10 +261,14 @@ export class LspManager {
     this.child = child;
     this.childPort = port;
     this.childOutput = [];
-    const keep = (d: Buffer) => {
-      this.childOutput.push(...d.toString('utf8').split(/\r?\n/).filter(Boolean));
+    const keep = (d: string) => {
+      this.childOutput.push(...d.split(/\r?\n/).filter(Boolean));
       if (this.childOutput.length > 40) this.childOutput.splice(0, this.childOutput.length - 40);
     };
+    // setEncoding: decode UTF-8 across chunk boundaries (a character split between two
+    // chunks was decoded as two U+FFFD replacement characters; Codex review of 0.1.0).
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
     child.stdout?.on('data', keep);
     child.stderr?.on('data', keep);
     child.on('exit', (code, signal) => {

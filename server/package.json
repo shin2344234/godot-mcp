@@ -1,6 +1,6 @@
 {
   "name": "@shin2344234/godot-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MCP server for the Godot 4 engine: edit scenes, nodes and scripts, run the game and read errors, through a live editor bridge or headless Godot.",
   "mcpName": "io.github.shin2344234/godot-mcp",
   "type": "module",

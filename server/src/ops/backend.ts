@@ -34,6 +34,10 @@ export async function callGodot<T = Record<string, unknown>>(
 ): Promise<BackendResult<T>> {
   // Drop undefined values so the GDScript side sees "missing" rather than null.
   const clean = Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined));
+  // The addon checks the paths it normalizes, but not every value it loads goes through
+  // that check (e.g. a texture path inside `properties`), so refuse escaping res:// paths
+  // here too, before anything reaches Godot.
+  assertNoResEscape(clean);
 
   if (await ctx.bridge.ensureConnected()) {
     return { result: await ctx.bridge.request<T>(method, clean), backend: 'editor' };
@@ -42,6 +46,39 @@ export async function callGodot<T = Record<string, unknown>>(
     throw new OpError('EDITOR_NOT_CONNECTED', `"${method}" needs the live editor. ${EDITOR_NOT_CONNECTED_HINT}`);
   }
   return { result: await ctx.headless.call<T>(method, clean), backend: 'headless' };
+}
+
+/**
+ * True for a `res://` path whose `..` segments climb above the project root, e.g.
+ * "res://../x.tscn" or "res://a/../../x.tscn". Godot's own simplify_path() keeps such a
+ * leading ".." instead of rejecting it, so the result still "starts with res://".
+ */
+export function resPathEscapes(value: string): boolean {
+  const v = value.trim().replace(/\\/g, '/');
+  if (!v.startsWith('res://')) return false;
+  // Walk the segments and fail as soon as the depth goes below the project root.
+  // (path.posix.normalize can't be used: it silently clamps "/.." to "/".)
+  let depth = 0;
+  for (const seg of v.slice('res://'.length).split('/')) {
+    if (seg === '..') depth--;
+    else if (seg !== '' && seg !== '.') depth++;
+    if (depth < 0) return true;
+  }
+  return false;
+}
+
+/**
+ * Throws BAD_PARAMS when any string in `params` (searched recursively, so nested
+ * `properties` values count too) is a res:// path that escapes the project folder.
+ */
+export function assertNoResEscape(params: unknown, seen = new Set<unknown>()): void {
+  if (typeof params === 'string') {
+    if (resPathEscapes(params)) throw new OpError('BAD_PARAMS', `"${params}" escapes the project folder. Use a res:// path inside the project.`);
+    return;
+  }
+  if (params === null || typeof params !== 'object' || seen.has(params)) return;
+  seen.add(params);
+  for (const v of Array.isArray(params) ? params : Object.values(params)) assertNoResEscape(v, seen);
 }
 
 /**
