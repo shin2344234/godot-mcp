@@ -44,8 +44,10 @@ params: `{ "action"?: "list" | "add" | "remove" | "clear", "breakpoints"?: ["res
 - Lines that can never stop are added with a **warning** naming the next code line.
   Verified with 4.7.2: GDScript stops only where the compiler emitted a line opcode
   (statements). Blank lines, comments and `func` declaration lines never trigger; Godot
-  doesn't move them. A member `var x := 1` line does stop, while the object is constructed
-  (function `@implicit_new`).
+  doesn't move them. Neither do other declarations: `extends`, `class_name`, `signal`,
+  `const`, `enum`, annotations alone on a line and member `var`s without an initializer.
+  A member `var x := 1` line does stop, while the object is constructed (function
+  `@implicit_new`).
 - `remove` of a breakpoint that wasn't set is sent anyway and warned about; `clear` removes
   every breakpoint in the list.
 - Works while the game runs and while it is stopped.
@@ -92,7 +94,22 @@ params: `{ "action": "continue" | "pause" | "step_into" | "step_over" | "step_ou
 
 ## godot_debug_state (read-only)
 
-params: `{ "frame"?: 0, "variables"?: true, "globals"?: false, "run_id"? }`
+params: `{ "frame"?: 0, "variables"?: true, "globals"?: false, "expand"?: ["self", "body"], "wait"?: seconds, "run_id"? }`
+
+- `wait`: when the game is running, wait up to that many seconds for it to stop. An action
+  that runs into a breakpoint (a `godot_game_input` click, a `godot_game_edit` call)
+  returns first and the stop arrives a moment later; without `wait` a debug_state right
+  after it can still say `stopped: false`.
+- `expand`: object variables of the selected frame (locals, members, `self`; up to 5) to
+  open one level: `{ "class", <script variables>, <common engine properties> }` under
+  `expanded`. Godot's debugger sends object variables as an id and class only, so this
+  runs two `evaluate`s in the stopped frame (the script's property list, then one
+  dictionary of `get()` values). The engine properties tried are `position`,
+  `global_position`, `rotation`, `scale`, `velocity`, `linear_velocity`,
+  `angular_velocity`, `visible`, `modulate`, `size`, `text`, `animation`, `frame`,
+  `current_animation` and `process_mode`; the ones the class lacks are left out. A name
+  that is not an object gets `{ "error" }`. Without `expand`, a stop that has object
+  variables carries a `note` saying how to open them.
 
 Running: `{ "run_id", "stopped": false, "running": true, "breakpoints": [...], "errors": 3 }`
 (`errors` = script errors so far; read them with `godot_run_output {errors: true}`).
