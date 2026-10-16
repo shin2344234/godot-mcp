@@ -46,6 +46,16 @@ describe.skipIf(!GODOT_BIN)('animation (headless)', () => {
     expect(idle.animation.loop).toBe('linear');
   }, 120_000);
 
+  it('node.set warns when the property is keyed by an animation', async () => {
+    // The dogfood test's enemies went invisible: an animation re-applied modulate after the
+    // tool set it. node.set now names the animation that will override the value.
+    const r = json(await call('godot_node_set', { scene: SCENE, path: 'Sprite2D', properties: { modulate: '#ffffff', position: [1, 2], visible: true } }));
+    // idle keys modulate and walk keys position; visible is not animated, so no third warning.
+    expect(r.warnings, JSON.stringify(r.warnings)).toHaveLength(2);
+    expect(r.warnings[0]).toMatch(/'modulate' is keyed by the animation 'idle' of AnimationPlayer/);
+    expect(r.warnings[1]).toMatch(/'position' is keyed by the animation 'walk'/);
+  }, 60_000);
+
   it('reads an AnimationLibrary .tres', async () => {
     const lib = json(await call('godot_anim_read', { library: 'res://anim/moves.tres', animation: 'jump' }));
     expect(lib.library).toBe('res://anim/moves.tres');
