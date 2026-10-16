@@ -17,6 +17,10 @@
  *                                        printed by `godot-mcp --version`; kept by hand)
  *   - addons/godot_mcp/plugin.cfg        version="..." (`godot-mcp init` compares it with
  *                                        the installed addon to decide whether to update)
+ *   - addons/godot_mcp/core/constants.gd PLUGIN_VERSION (the version the addon reports in
+ *                                        the bridge welcome, editor.status and the session
+ *                                        file; scripts/build-addon-zip.mjs refuses to build
+ *                                        when it disagrees with plugin.cfg)
  *   - server.json                        "version" and the npm package entry's "version"
  *                                        (the MCP Registry entry)
  *
@@ -72,6 +76,12 @@ export function checkVersions(root = REPO_ROOT) {
   // Godot ConfigFile syntax: version="0.1.0" on its own line in [plugin].
   const pluginCfg = readFileSync(rel('addons/godot_mcp/plugin.cfg'), 'utf8');
   versions['addons/godot_mcp/plugin.cfg'] = /^\s*version\s*=\s*"([^"]+)"/m.exec(pluginCfg)?.[1];
+
+  // --- addons/godot_mcp/core/constants.gd -------------------------------------------
+  // GDScript: const PLUGIN_VERSION: String = "0.1.0"
+  // 0.1.1 shipped with this still at 0.1.0 because nothing here checked it.
+  const constantsGd = readFileSync(rel('addons/godot_mcp/core/constants.gd'), 'utf8');
+  versions['addons/godot_mcp/core/constants.gd'] = /PLUGIN_VERSION\s*:\s*String\s*=\s*"([^"]+)"/.exec(constantsGd)?.[1];
 
   // --- server.json (MCP Registry) ---------------------------------------------------
   const serverJson = readJson(rel('server.json'));
@@ -141,6 +151,7 @@ export function setVersions(version, root = REPO_ROOT) {
 
   edit('server/src/version.ts', /(SERVER_VERSION\s*=\s*['"])[^'"]*(['"])/, `$1${version}$2`);
   edit('addons/godot_mcp/plugin.cfg', /^(\s*version\s*=\s*")[^"]*(")/m, `$1${version}$2`);
+  edit('addons/godot_mcp/core/constants.gd', /(PLUGIN_VERSION\s*:\s*String\s*=\s*")[^"]*(")/, `$1${version}$2`);
   // server.json: the top-level "version" and each package "version" (the only "version"
   // keys in the file). Global flag: all of them.
   edit('server.json', /("version"\s*:\s*")[^"]*(")/g, `$1${version}$2`);
