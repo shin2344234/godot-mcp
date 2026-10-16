@@ -63,7 +63,10 @@ params: `{ "action": "continue" | "pause" | "step_into" | "step_over" | "step_ou
   is, from a fresh stack dump:
   `{ "stopped": true, "reason": "step", "at": { "file", "line", "function", "code" }, "depth": 2, "locals": {...} }`
   (`code` is that source line, trimmed). Stepping past the end of a function stops at the
-  next GDScript line that runs anywhere (often the next frame's callback).
+  next GDScript line that runs anywhere (often the next frame's callback). A function the
+  engine called (a signal, physics or input callback, a deferred call) has no GDScript
+  caller, so `step_out` from it lands wherever GDScript runs next; when a `step_out` does not
+  stop in the caller frame, the result's `note` says so and names both places.
 - `continue` resumes. With `wait` > 0 (default 0) it waits for the next stop and returns it
   like a step; otherwise `{ "stopped": false, "running": true }`.
 - `pause` sends `core:break`. The game breaks at its next debugger poll, between frames

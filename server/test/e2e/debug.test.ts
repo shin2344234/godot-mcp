@@ -183,6 +183,8 @@ describe.skipIf(!enabled)('debug: process runs', () => {
       expect(caller.stack[1].code).toBe('var doubled := twice(counter)');
       r = json(await call('godot_debug_control', { action: 'step_out' }));
       expect(r).toMatchObject({ stopped: true, reason: 'step', at: { line: 10, function: '_on_tick' }, depth: 1, locals: { doubled: 2 } });
+      // It landed in the caller, so there is nothing to explain.
+      expect(r.note).toBeUndefined();
     }, 60_000);
 
     it('evaluates expressions in a frame, and reports bad ones without resuming', async () => {

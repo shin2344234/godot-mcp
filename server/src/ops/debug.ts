@@ -364,6 +364,7 @@ export const debugControl = defineOp({
 
     const waitMs = (wait ?? (action === 'continue' ? 0 : DEFAULT_WAIT_S)) * 1000;
     let outcome: StopInfo | 'exited' | 'timeout';
+    let stepFrom: StackFrame[] | undefined;
     if (action === 'pause') {
       if (state.stop) {
         const stop = state.stop;
@@ -375,6 +376,9 @@ export const debugControl = defineOp({
       // After a pause there is no stack: "next"/"out" are relative to a frame, so every
       // step becomes "step" (stop at the next GDScript line), like the editor's step does.
       const command = action === 'continue' ? 'continue' : !stop.hasStack ? 'step' : action === 'step_into' ? 'step' : action === 'step_over' ? 'next' : 'out';
+      // step_out: remember where we were and who called us, so the result can say when it
+      // did not land in that caller (see stepOutNote).
+      if (command === 'out') stepFrom = await state.stack();
       outcome = await state.resume(command, waitMs, ctx.signal);
     }
 
@@ -395,7 +399,7 @@ export const debugControl = defineOp({
     const stack = await state.stack();
     const top = stack[0];
     const locals = top ? scopeVars(await state.variables(0), 0) : undefined;
-    const note = stopNote(stop);
+    const note = [stopNote(stop), stepFrom ? stepOutNote(stepFrom, top) : undefined].filter(Boolean).join(' ') || undefined;
     return {
       data: {
         run_id: run.id,
@@ -406,6 +410,25 @@ export const debugControl = defineOp({
     };
   },
 });
+
+/**
+ * step_out runs until the current function returns and stops in its caller. When the
+ * function was called by the engine (a signal, a physics or input callback, a deferred
+ * call) there is no GDScript caller frame, so Godot stops at the next GDScript line that
+ * runs, wherever that is. The 2D dogfood test stepped out of Player.take_hit (called from a
+ * hurtbox's body_entered handler, itself flushed by the physics server) and landed in
+ * slime._physics_process with no word of why. Say so when the stop is not in the caller.
+ */
+export function stepOutNote(from: StackFrame[], top: StackFrame | undefined): string | undefined {
+  const [current, caller] = from;
+  if (!current || !top) return undefined;
+  const where = (f: StackFrame) => `${f.function}() (${f.file}:${f.line})`;
+  if (!caller) {
+    return `${current.function}() had no GDScript caller (the engine called it: a signal, physics or input callback, or a deferred call), so step_out stopped at the next GDScript line that ran: ${where(top)}.`;
+  }
+  if (top.file === caller.file && top.function === caller.function) return undefined;
+  return `Expected to stop in the caller ${where(caller)}, but the next GDScript line that ran was ${where(top)}.`;
+}
 
 export const debugState = defineOp({
   name: 'debug.state',
