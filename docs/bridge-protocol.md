@@ -243,7 +243,9 @@ null, `groups` when empty, and `truncated` unless it is true; `children` (possib
 `depth` limits recursion (children beyond depth are omitted but `child_count` is kept).
 `max_nodes` caps total nodes; set `truncated: true` when hit. Nodes that belong to an
 instanced sub-scene are shown with `"instance"` and their internal children are NOT
-expanded (unless `editable_children` is on for that instance).
+expanded (unless `editable_children` is on for that instance); such an entry has
+`"hidden_children": N` instead. Passing the instance (or a node inside it) as `root` lists its
+own nodes, each with `"inside_instance": "<instance path>"`, which node.get also accepts.
 
 ### node.get (E/H)
 

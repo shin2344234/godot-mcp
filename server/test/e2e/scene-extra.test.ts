@@ -47,6 +47,19 @@ describe.skipIf(!enabled)('scene extras: headless', () => {
     expect(tscn).toContain('position = Vector2(5, 6)');
   }, 120_000);
 
+  it('scene.tree counts an instance\'s hidden nodes and lists them when started there', async () => {
+    // main.tscn instances player.tscn as "Player" without Editable Children.
+    const tree = json(await call('godot_scene_tree', { scene: 'res://main.tscn' }));
+    const player = tree.root.children.find((c: { name: string }) => c.name === 'Player');
+    expect(player).toMatchObject({ instance: 'res://player.tscn', child_count: 0, hidden_children: 2, children: [] });
+    const inner = json(await call('godot_scene_tree', { scene: 'res://main.tscn', root: 'Player' }));
+    expect(inner.root.child_count).toBe(2);
+    expect(inner.root.children.map((c: { path: string; inside_instance: string }) => [c.path, c.inside_instance])).toEqual([
+      ['Player/Sprite2D', 'Player'],
+      ['Player/CollisionShape2D', 'Player'],
+    ]);
+  }, 60_000);
+
   it('node.instance refuses cycles', async () => {
     const self = errorText(await call('godot_node_instance', { scene: 'res://main.tscn', instance: 'res://main.tscn' }));
     expect(self).toMatch(/BAD_PARAMS.*cycle/);

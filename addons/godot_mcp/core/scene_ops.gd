@@ -56,8 +56,14 @@ static func tree(root: Node, scene_path: String, params: Variant) -> Dictionary:
 	var res: Dictionary = NodePaths.resolve(root, start_path, "root")
 	if R.is_err(res):
 		return res
-	var state: Dictionary = {"count": 0, "max": max_nodes, "truncated": false}
-	var dump: Dictionary = _dump_node(root, res["value"], 0, depth, include_props, state)
+	var start: Node = res["value"]
+	# Starting at an instanced sub-scene (or inside one) is an explicit request for its own
+	# nodes, so they are listed even without "Editable Children" (marked inside_instance;
+	# node.get works on them too). The 2D dogfood test could read "HUD/Margin" with node.get
+	# but had no way to discover it: scene.tree from the root showed HUD as a leaf.
+	var show_internal: bool = start != root and (not start.scene_file_path.is_empty() or not NodePaths.is_editable(root, start))
+	var state: Dictionary = {"count": 0, "max": max_nodes, "truncated": false, "internal": show_internal}
+	var dump: Dictionary = _dump_node(root, start, 0, depth, include_props, state)
 	return R.ok({
 		"scene": scene_path,
 		"root": dump,
@@ -74,6 +80,11 @@ static func _dump_node(root: Node, node: Node, level: int, max_depth: int, inclu
 	# Internal nodes of an instanced sub-scene are hidden unless "Editable Children" is on;
 	# NodePaths.listed_children applies exactly that rule.
 	var children: Array[Node] = NodePaths.listed_children(root, node)
+	if bool(state.get("internal", false)):
+		children.assign(node.get_children())
+	elif children.size() < node.get_child_count():
+		# An instance whose own nodes are hidden: say how many, and how to list them.
+		info["hidden_children"] = node.get_child_count() - children.size()
 	info["child_count"] = children.size()
 	var out_children: Array = []
 	var truncated: bool = false
