@@ -7,7 +7,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RunManager } from '../../src/godot/runs.js';
 import { runProcess } from '../../src/godot/headless.js';
 import { assertNoResEscape, resPathEscapes } from '../../src/ops/backend.js';
@@ -51,17 +51,32 @@ describe('res:// paths that escape the project', () => {
 });
 
 // Finding 2: files.search / recursive files.list followed links out of the project.
-describe.skipIf(process.platform === 'win32')('file walks and links', () => {
-  const outside = tempDir('godot-mcp-outside-');
-  writeFileSync(path.join(outside, 'secret.gd'), 'var token = "OUTSIDE_SECRET"\n');
-  const proj = tempDir('godot-mcp-proj-');
-  writeFileSync(path.join(proj, 'project.godot'), '');
-  writeFileSync(path.join(proj, 'inside.gd'), 'var token = "INSIDE"\n');
-  mkdirSync(path.join(proj, 'sub'));
-  symlinkSync(outside, path.join(proj, 'sub', 'out'), 'dir'); // a folder link leaving the project
-  symlinkSync(path.join(proj, 'sub'), path.join(proj, 'sub', 'loop'), 'dir'); // a link back to its parent
-  symlinkSync(path.join(proj, 'inside.gd'), path.join(proj, 'alias.gd')); // a link that stays inside
-  const ctx = fileCtx(proj);
+// Folder links are junctions on Windows: they need no special rights (real symlinks need
+// Developer Mode or admin) and are what the review reproduced the bug with. The setup
+// runs in beforeAll, not in the describe body, so it never runs during test collection.
+describe('file walks and links', () => {
+  const dirLink = process.platform === 'win32' ? 'junction' : 'dir';
+  let ctx: OpContext;
+  /** False where file symlinks need rights this machine doesn't have (Windows EPERM). */
+  let fileLinks = true;
+
+  beforeAll(() => {
+    const outside = tempDir('godot-mcp-outside-');
+    writeFileSync(path.join(outside, 'secret.gd'), 'var token = "OUTSIDE_SECRET"\n');
+    const proj = tempDir('godot-mcp-proj-');
+    writeFileSync(path.join(proj, 'project.godot'), '');
+    writeFileSync(path.join(proj, 'inside.gd'), 'var token = "INSIDE"\n');
+    mkdirSync(path.join(proj, 'sub'));
+    symlinkSync(outside, path.join(proj, 'sub', 'out'), dirLink); // a folder link leaving the project
+    symlinkSync(path.join(proj, 'sub'), path.join(proj, 'sub', 'loop'), dirLink); // a link back to its parent
+    try {
+      symlinkSync(path.join(proj, 'inside.gd'), path.join(proj, 'alias.gd')); // a link that stays inside
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EPERM') throw err;
+      fileLinks = false;
+    }
+    ctx = fileCtx(proj);
+  });
 
   it('files.search skips links that leave the project', async () => {
     const res = (await filesSearch.run({ query: 'token', regex: false, case_sensitive: false, path: 'res://', max_results: 100 } as never, ctx)).data as {
@@ -69,14 +84,16 @@ describe.skipIf(process.platform === 'win32')('file walks and links', () => {
     };
     const texts = res.matches.map((m) => m.text).join('\n');
     expect(texts).not.toContain('OUTSIDE_SECRET');
-    expect(res.matches.map((m) => m.path)).toEqual(expect.arrayContaining(['res://inside.gd', 'res://alias.gd']));
+    const paths = res.matches.map((m) => m.path);
+    expect(paths).toContain('res://inside.gd');
+    if (fileLinks) expect(paths).toContain('res://alias.gd');
   });
 
   it('files.list does not walk outside the project or loop', async () => {
     const res = (await filesList.run({ path: 'res://', recursive: true, all: true, max: 500 } as never, ctx)).data as { entries: { path: string }[] };
     const paths = res.entries.map((e) => e.path);
     expect(paths.some((p) => p.includes('secret.gd'))).toBe(false);
-    expect(paths).toContain('res://alias.gd');
+    if (fileLinks) expect(paths).toContain('res://alias.gd');
     expect(paths.length).toBeLessThan(20); // no endless sub/loop/loop/... recursion
   });
 });
