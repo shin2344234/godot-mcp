@@ -515,6 +515,8 @@ static func plan_node_remove(root: Node, params: Variant) -> Dictionary:
 	if node == root:
 		return R.err(R.BAD_PARAMS, "node.remove: cannot remove the scene root. Remove its children individually, or create a new scene with scene.create.")
 	var edit_err: Dictionary = NodePaths.check_editable(root, node, "remove")
+	if edit_err.is_empty():
+		edit_err = NodePaths.check_structural(root, node, "remove")
 	if not edit_err.is_empty():
 		return edit_err
 	var parent: Node = node.get_parent()
@@ -552,6 +554,8 @@ static func plan_node_rename(root: Node, params: Variant) -> Dictionary:
 		return res
 	var node: Node = res["value"]
 	var edit_err: Dictionary = NodePaths.check_editable(root, node, "rename")
+	if edit_err.is_empty():
+		edit_err = NodePaths.check_structural(root, node, "rename")
 	if not edit_err.is_empty():
 		return edit_err
 	var parent: Node = node.get_parent()
@@ -583,6 +587,8 @@ static func plan_node_reparent(root: Node, params: Variant) -> Dictionary:
 	if node == root:
 		return R.err(R.BAD_PARAMS, "node.reparent: the scene root cannot be moved.")
 	var edit_err: Dictionary = NodePaths.check_editable(root, node, "move")
+	if edit_err.is_empty():
+		edit_err = NodePaths.check_structural(root, node, "move")
 	if not edit_err.is_empty():
 		return edit_err
 	var pres: Dictionary = NodePaths.resolve(root, new_parent_path, "new_parent")

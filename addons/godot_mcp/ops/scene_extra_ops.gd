@@ -374,6 +374,8 @@ static func plan_node_move(root: Node, params: Variant) -> Dictionary:
 	if node == root:
 		return R.err(R.BAD_PARAMS, "node.move: the scene root has no siblings to reorder.")
 	var edit_err: Dictionary = NodePaths.check_editable(root, node, "move")
+	if edit_err.is_empty():
+		edit_err = NodePaths.check_structural(root, node, "reorder")
 	if not edit_err.is_empty():
 		return edit_err
 	var parent: Node = node.get_parent()

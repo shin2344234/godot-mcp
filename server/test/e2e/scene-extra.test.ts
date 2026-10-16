@@ -67,6 +67,28 @@ describe.skipIf(!enabled)('scene extras: headless', () => {
     expect(errorText(await call('godot_scene_inherit', { path: 'res://x.tscn', base: 'res://nope.tscn' }))).toMatch(/NOT_FOUND.*Existing scenes/);
   }, 120_000);
 
+  it('refuses to remove, rename or move nodes inherited from the base scene', async () => {
+    // Godot cannot store the removal/rename of a base node in an inherited scene: it would
+    // come back on the next load, so these must fail instead of reporting success.
+    const scene = 'res://chars/hero.tscn';
+    for (const [tool, args] of [
+      ['godot_node_remove', { path: 'Sprite2D' }],
+      ['godot_node_rename', { path: 'Sprite2D', name: 'Body' }],
+      ['godot_node_reparent', { path: 'Sprite2D', new_parent: 'CollisionShape2D' }],
+      ['godot_node_move', { path: 'Sprite2D', index: -1 }],
+    ] as const) {
+      expect(errorText(await call(tool, { scene, ...args }))).toMatch(/BAD_PARAMS.*inherited from the base scene 'res:\/\/player\.tscn'/);
+    }
+    // Property overrides and nodes added in the inherited scene itself still work.
+    json(await call('godot_node_set', { scene, path: 'Sprite2D', properties: { visible: false } }));
+    json(await call('godot_node_add', { scene, type: 'Node2D', name: 'Hat' }));
+    json(await call('godot_node_rename', { scene, path: 'Hat', name: 'Cap' }));
+    json(await call('godot_node_remove', { scene, path: 'Cap' }));
+    const tscn = read(proj.dir, 'chars/hero.tscn');
+    expect(tscn).toContain('visible = false');
+    expect(tscn).not.toContain('Cap');
+  }, 120_000);
+
   it('node.find filters by type, name, group and property', async () => {
     const byType = json(await call('godot_node_find', { scene: 'res://main.tscn', type: 'Node2D' }));
     // Node2D subclasses match too (the CharacterBody2D Player instance).
@@ -247,6 +269,11 @@ describe.skipIf(!enabled)('scene extras: editor', () => {
     status = json(await call('godot_status', {}));
     expect(status.editor.open_scenes).not.toContain('res://chars/hero.tscn');
     expect(read(proj.dir, 'chars/hero.tscn')).not.toContain('Unsaved');
+    // The same guard applies in the editor (the dogfood test removed a base node there,
+    // got a success, and found the node back after save + reopen).
+    json(await call('godot_scene_open', { path: 'res://chars/hero.tscn' }));
+    expect(errorText(await call('godot_node_remove', { path: 'Sprite2D' }))).toMatch(/BAD_PARAMS.*inherited from the base scene/);
+    json(await call('godot_scene_close', { discard: true }));
 
     expect(errorText(await call('godot_scene_close', { path: 'res://player.tscn' }))).toMatch(/NOT_FOUND: .*not open/);
   }, 120_000);
