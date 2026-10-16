@@ -247,7 +247,12 @@ describe('resolveBreakpoint', () => {
 
   it('canonicalizes paths and accepts {file, line}', async () => {
     expect(await resolveBreakpoint(dir, 'p.gd:5')).toEqual({ file: 'res://p.gd', line: 5 });
-    expect(await resolveBreakpoint(dir, { file: 'res://p.gd', line: 1 })).toEqual({ file: 'res://p.gd', line: 1 });
+    // Line 1 is `extends Node`, a declaration, so it also carries a warning (next test).
+    expect(await resolveBreakpoint(dir, { file: 'res://p.gd', line: 1 })).toMatchObject({ file: 'res://p.gd', line: 1 });
+  });
+  it('warns about breakpoints on declarations', async () => {
+    const bp = await resolveBreakpoint(dir, 'p.gd:1');
+    expect(bp.warning).toMatch(/declaration.*next code line is 5/);
   });
   it('warns about lines that never stop', async () => {
     expect((await resolveBreakpoint(dir, 'res://p.gd:3')).warning).toMatch(/blank or a comment.*next code line is 5/);
