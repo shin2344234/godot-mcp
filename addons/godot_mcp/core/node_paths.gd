@@ -116,6 +116,73 @@ static func check_editable(root: Node, node: Node, what: String) -> Dictionary:
 		{"instance": rel_path(root, inst), "instance_scene": inst.scene_file_path, "path_in_instance": inner})
 
 
+## Returns an error if `node` cannot be removed, renamed, reparented or reordered in the
+## scene rooted at `root`, otherwise {}. Call it after check_editable().
+##
+## Property changes on such nodes are saved fine (as overrides), but Godot's scene format
+## has no way to store the *absence*, new name or new position of a node that comes from
+## somewhere else. PackedScene.pack() silently re-adds it from the base on the next load
+## (verified on 4.7.2: a removed inherited node is back after save + reload, and a renamed
+## one comes back under its old name next to the "renamed" copy). The editor's Scene dock
+## refuses these operations for the same reason ("Can't operate on nodes the current scene
+## inherits from!"), so we refuse them too instead of reporting a success that is lost on
+## save. Two kinds of nodes are affected:
+##   * nodes inherited from the base scene of an inherited scene (scene.inherit);
+##   * nodes inside an instanced sub-scene whose "Editable Children" flag is on (their
+##     owner is the instance, not the root).
+static func check_structural(root: Node, node: Node, what: String) -> Dictionary:
+	if node == root:
+		return {}
+	if node.owner != null and node.owner != root:
+		var inst: Node = node.owner
+		return R.err(R.BAD_PARAMS, ("Cannot %s '%s': it belongs to the instanced scene '%s' (instance '%s', shown here " +
+			"because Editable Children is on). Godot only saves property changes on such nodes, so this would " +
+			"be lost on save. Edit '%s' itself, or hide the node (visible: false).") %
+			[what, rel_path(root, node), inst.scene_file_path, rel_path(root, inst), inst.scene_file_path],
+			{"instance": rel_path(root, inst), "instance_scene": inst.scene_file_path})
+	var base: String = inherited_from(root, node)
+	if not base.is_empty():
+		return R.err(R.BAD_PARAMS, ("Cannot %s '%s': it is inherited from the base scene '%s'. An inherited scene can " +
+			"only override properties of base nodes; Godot would restore the node as it is in the base on the next " +
+			"load. Edit the base scene instead, or hide the node here (node.set {\"visible\": false}).") %
+			[what, rel_path(root, node), base], {"base_scene": base})
+	return {}
+
+
+## The res:// path of the base scene `node` is inherited from, or "" when `node` was added
+## in this scene (or the scene is not an inherited scene).
+##
+## Godot keeps the inherited state on the root (Node::get_scene_inherited_state), but that is
+## not exposed to scripts. So we look at the saved scene instead: in an inherited .tscn the
+## root node entry is an instance of the base (SceneState.get_node_instance(0) returns the
+## base PackedScene), and the base's SceneState lists its node paths. Bases can be inherited
+## themselves, so we walk the chain. Unsaved scenes have no file and cannot be inherited
+## (scene.inherit always writes the new file first), so they correctly return "".
+static func inherited_from(root: Node, node: Node) -> String:
+	var own_path: String = root.scene_file_path
+	if own_path.is_empty() or not ResourceLoader.exists(own_path):
+		return ""
+	var packed: PackedScene = ResourceLoader.load(own_path) as PackedScene
+	if packed == null:
+		return ""
+	var rel: String = rel_path(root, node)
+	var base: PackedScene = packed.get_state().get_node_instance(0)
+	var guard: int = 0
+	# The walk is bounded in case of a (broken) cyclic inheritance chain.
+	while base != null and guard < 16:
+		var st: SceneState = base.get_state()
+		for i: int in range(st.get_node_count()):
+			# SceneState paths are "." for the root and "./A/B" below it (checked on 4.7.2).
+			var sp: String = String(st.get_node_path(i))
+			if sp.begins_with("./"):
+				sp = sp.substr(2)
+			if sp == rel:
+				return base.resource_path
+		base = st.get_node_instance(0) if st.get_node_count() > 0 else null
+		guard += 1
+	return ""
+
+
 ## Child names that are visible/listed for `node` (see is_editable), in tree order.
 static func listed_children(root: Node, node: Node) -> Array[Node]:
 	var out: Array[Node] = []

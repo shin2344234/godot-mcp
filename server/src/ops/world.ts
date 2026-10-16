@@ -66,12 +66,13 @@ export const gridEdit = defineOp({
           item: int.optional(),
           orientation: int.optional().describe('0-23; Y 90/180/270=16/10/22'),
           terrain_set: int.optional(),
-          terrain: int.optional(),
+          // By name ("rock") or index: the dogfood test had the schema reject names.
+          terrain: z.union([int, z.string()]).optional(),
           mode: z.enum(['connect', 'path']).optional(),
         }),
       )
       .min(1)
-      .describe('Max 10000 cells.'),
+      .describe('set/erase/terrain take cells and/or rect. Max 10000 cells.'),
   }),
   readOnly: false,
   destructive: false,
@@ -83,15 +84,23 @@ export const tilesetEdit = defineOp({
   group: 'world',
   title: 'Edit TileSet',
   description:
-    'Godot world: create/edit a TileSet .tres: atlas sources from textures, collision, terrains, custom data. Saved at once.',
+    'Godot world: create/edit a TileSet .tres: atlas sources, collision (one-way), navigation, occlusion, terrains, custom data, per-tile values, alternative tiles, animation. Saved at once.',
   input: z.object({
     path: z.string().describe('.tres path'),
     create: z.boolean().default(false),
     tile_size: pair.optional(),
     ops: z
       .array(
-        z.object({
-          op: z.enum(['add_atlas', 'remove_source', 'add_physics_layer', 'set_collision', 'add_terrain_set', 'add_terrain', 'set_terrain', 'add_custom_data']),
+        // Loose: keys an op does not use reach Godot, which lists them in `warnings`
+        // instead of zod dropping them silently (add_terrain {type: "#8fd16a"} in the
+        // dogfood test). Per-op fields are documented in docs/methods/world.md; one flat
+        // object keeps the schema far smaller than a union per op.
+        z.looseObject({
+          op: z.enum([
+            'add_atlas', 'remove_source', 'add_physics_layer', 'set_collision', 'add_navigation_layer', 'set_navigation',
+            'add_occlusion_layer', 'set_occluder', 'add_terrain_set', 'add_terrain', 'set_terrain', 'add_custom_data',
+            'set_tile_data', 'add_alternative', 'set_animation',
+          ]),
           texture: z.string().optional(),
           tile_size: pair.optional(),
           separation: pair.optional(),
@@ -99,15 +108,29 @@ export const tilesetEdit = defineOp({
           create_tiles: z.enum(['opaque', 'all', 'none']).optional(),
           source: int.optional(),
           tiles: z.array(pair).optional().describe('Atlas coords; default all'),
+          alt: int.optional().describe('Alternative id; default all'),
           physics_layer: int.optional(),
+          layer: int.optional().describe('Nav/occlusion layer; default 0'),
           polygon: z.array(pair).optional().describe('Px from tile center; default full tile; [] removes'),
+          one_way: z.boolean().optional(),
+          one_way_margin: z.number().optional(),
           collision_layer: int.optional(),
-          mode: z.enum(['corners_and_sides', 'corners', 'sides']).optional(),
+          collision_mask: int.optional(),
+          layers: int.optional(),
+          light_mask: int.optional(),
+          sdf_collision: z.boolean().optional(),
+          mode: z.enum(['corners_and_sides', 'corners', 'sides', 'default', 'random_start_times']).optional(),
           terrain_set: int.optional(),
           terrain: int.optional(),
           peering: z.record(z.string(), int).optional().describe('{"right_side":0} or {"all":0}'),
           name: z.string().optional(),
           type: z.string().optional(),
+          color: z.union([z.string(), pair]).optional(),
+          values: z.record(z.string(), z.unknown()).optional().describe('Custom data by layer name, TileData props'),
+          frames: int.optional(),
+          columns: int.optional(),
+          duration: z.union([z.number(), pair]).optional().describe('Seconds, per frame or list'),
+          speed: z.number().optional(),
         }),
       )
       .default([]),
@@ -127,6 +150,7 @@ export const navigationBake = defineOp({
     scene,
     path: z.string().optional().describe('Region; default the only one'),
     outline: z.array(pair).optional().describe('2D walkable polygon'),
+    agent_radius: z.number().optional(),
   }),
   readOnly: false,
   destructive: false,

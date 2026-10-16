@@ -71,7 +71,20 @@ differs from the class default (`ClassDB.class_get_property_default_value`);
 properties, mostly defaults. `properties: ["*"]` lists all of them. A list of names reads
 exactly those; nested paths use `Object.get_indexed` syntax: steps through objects /
 sub-resources (`"material:albedo_color"`) and into built-in values (`"position:x"`,
-`"modulate:a"`). Unknown names → `NOT_FOUND` with similar names.
+`"modulate:a"`). Unknown names → `NOT_FOUND` with similar names, and the hint that getters
+work too (or, when the name is a method, `'is_playing' is a method: write "is_playing()"`).
+
+**Getters.** An entry ending in `()` calls an argument-less getter and reports what it
+returns under that key: `["get_screen_center_position()", "is_playing()"]`. Derived values
+like these exist only as methods, and reading them needed `godot_game_eval` (off by default).
+To keep `game.get` a read, only methods that need no arguments (defaults are fine) **and** are
+const in the engine (`METHOD_FLAG_CONST` in `get_method_list()`: verified for
+Camera2D.get_screen_center_position, AnimationPlayer/AnimatedSprite2D.is_playing,
+Viewport.get_visible_rect...) **or** named like a getter (`get_`/`is_`/`has_`/`can_`, which is
+how script methods are recognised; GDScript methods are never flagged const) are called.
+Others → `BAD_PARAMS` pointing to `godot_game_edit` `call`; unknown names → `NOT_FOUND` with
+similar method names. A script getter runs game code: a script error in it is handled like
+one in `call` (see "Never a runtime error").
 
 `signals: true` adds `{"name(arg: Type)": [{"to": "path", "method": "_on_x"}]}`: script
 signals always, built-in signals only when connected; engine-internal connections (C++
@@ -136,7 +149,16 @@ those instructions, without touching the game. The runtime itself trusts its deb
 - `mode: "expression"`: Godot's `Expression` — `parse(code, input names)`, then
   `execute(input values, base = the node at path, show_error = false)`. One expression
   (no statements); `self` and bare method names refer to the node. Parse errors →
-  `BAD_PARAMS`, execution errors → `GODOT_ERROR` with `get_error_text()`.
+  `BAD_PARAMS`, execution errors → `GODOT_ERROR` with `get_error_text()`. **Autoloads and
+  engine singletons** are visible by name (`GameState.lives`, `Input.is_action_pressed("jump")`,
+  `Engine.get_frames_per_second()`): an Expression only resolves its inputs, `self`'s members
+  and built-ins (verified with 4.7.2: `GameState.lives` failed with "Invalid named index
+  'GameState' for base type Object", although `godot_debug_control evaluate`, which runs in a
+  GDScript frame, sees them), so every autoload (`ProjectSettings` `autoload/<Name>`, the node
+  `/root/<Name>`) and engine singleton (`Engine.get_singleton_list()`) whose name occurs in the
+  code as a word is added as an input. Only names that occur are added, so a node property
+  with the same name as an unused singleton is never shadowed; your own `inputs` win over
+  both. `$Node` syntax is GDScript only; use `get_node("Node")`.
 - `mode: "gdscript"`: the code is the body of `func run(node, tree, inputs)` in a temporary
   `extends RefCounted` script (indented with tabs, or spaces if the code uses spaces), or a
   whole script when it contains `func run(` (an `extends RefCounted` line is added if it

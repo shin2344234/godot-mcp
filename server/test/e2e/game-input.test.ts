@@ -30,11 +30,13 @@ signal scored(points: int, who: String)
 
 var clicks: int = 0
 var ticks: int = 0
+var pticks: int = 0
 
 
 func _ready() -> void:
 	$Start.pressed.connect(_on_start)
 	$Name.text_submitted.connect(_on_submitted)
+	$Reload.pressed.connect(func() -> void: get_tree().reload_current_scene())
 
 
 func _on_start() -> void:
@@ -61,6 +63,7 @@ func _process(_delta: float) -> void:
 
 
 func _physics_process(delta: float) -> void:
+	pticks += 1
 	if Input.is_action_pressed("move_right"):
 		$Mover.position.x += 200.0 * delta
 
@@ -82,6 +85,9 @@ const rect = (l: number, t: number, r: number, b: number) => `offset_left = ${l}
 const SCENE = `[gd_scene format=3]
 
 [ext_resource type="Script" path="res://input_test.gd" id="1"]
+
+[sub_resource type="RectangleShape2D" id="box"]
+size = Vector2(40, 40)
 
 [node name="InputTest" type="Control"]
 layout_mode = 3
@@ -105,6 +111,15 @@ ${rect(100, 300, 400, 330)}max_value = 100.0
 
 [node name="Mover" type="Node2D" parent="."]
 position = Vector2(0, 500)
+
+[node name="Reload" type="Button" parent="."]
+${rect(500, 100, 600, 140)}text = "Reload"
+
+[node name="Crate" type="StaticBody2D" parent="."]
+position = Vector2(800, 400)
+
+[node name="Shape" type="CollisionShape2D" parent="Crate"]
+shape = SubResource("box")
 `;
 
 function addTestScene(dir: string): void {
@@ -160,6 +175,12 @@ describe.skipIf(!enabled)('game input/time/record: process run (headless)', () =
     expect(covered.steps[0]).toMatchObject({ hit: 'Cover', hit_target: false });
     expect(covered.steps[1].hit).toBe('Start');
     expect(await read('clicks')).toBe(2);
+    // Physics objects under the pointer are reported separately from the Control `hit`
+    // (here the full-rect root Control).
+    const crate = await input([{ type: 'click', at: 'Crate' }, { type: 'move', at: [805, 395] }, { type: 'move', at: [10, 10] }]);
+    expect(crate.steps[0]).toMatchObject({ at: [800, 400], hit: '.', physics: ['Crate'] });
+    expect(crate.steps[1].physics).toEqual(['Crate']);
+    expect(crate.steps[2].physics).toBeUndefined();
   }, 60_000);
 
   it('types text into the focused control', async () => {
@@ -171,6 +192,11 @@ describe.skipIf(!enabled)('game input/time/record: process run (headless)', () =
   it('sends keys and actions that _process/_physics_process see', async () => {
     const r = await input([{ type: 'key', key: 'Space' }, { type: 'key', key: 'Ctrl+S' }]);
     expect(r.steps.map((s: { key: string }) => s.key)).toEqual(['Space', 'Ctrl+S']);
+    // The actions the key triggers are listed (project actions first). Ctrl+S triggers none,
+    // and nothing consumed it (the game reads it in _unhandled_input without marking it), so
+    // there is no `handled: false` noise either.
+    expect(r.steps[0].actions).toEqual(['jump', 'ui_accept', 'ui_select']);
+    expect(r.steps[1]).toEqual({ type: 'key', key: 'Ctrl+S' });
     // is_action_just_pressed("jump") in _process and the modifier combo in _unhandled_input.
     expect(await waitFor(async () => /JUMP_JUST[\s\S]*KEY Ctrl\+S/.test(await output()))).toBe(true);
     const before = Number(await read("get_node('Mover').position.x"));
@@ -226,6 +252,17 @@ describe.skipIf(!enabled)('game input/time/record: process run (headless)', () =
     expect(json(await node)).toMatchObject({ node: `Spawned${next}`, type: 'Node2D' });
     const cond = await time({ action: 'wait_for', condition: 'ticks > 5', timeout_ms: 3000 });
     expect(cond.value).toBe(true);
+    // Autoloads and engine singletons are visible in conditions.
+    expect((await time({ action: 'wait_for', condition: 'Engine.get_physics_ticks_per_second() == 60 and GameState != null', timeout_ms: 2000 })).value).toBe(true);
+    // A watched node that is freed while waiting is a result ({freed: true}), not an error:
+    // both for a condition on it and for a signal it will now never emit.
+    await call('godot_game_edit', { ops: [{ action: 'spawn', class: 'Timer', name: 'Doomed' }] });
+    const condFreed = call('godot_game_time', { action: 'wait_for', node: 'Doomed', condition: 'is_stopped() == false', timeout_ms: 5000 });
+    const sigFreed = call('godot_game_time', { action: 'wait_for', node: 'Doomed', signal: 'timeout', timeout_ms: 5000 });
+    await new Promise((r) => setTimeout(r, 200));
+    await call('godot_game_edit', { ops: [{ action: 'remove', path: 'Doomed' }] });
+    expect(json(await condFreed)).toMatchObject({ freed: true, node: 'Doomed', value: false });
+    expect(json(await sigFreed)).toMatchObject({ freed: true, node: 'Doomed' });
     const frames = await time({ action: 'wait_for', frames: 10 });
     expect(frames.frames).toBeGreaterThanOrEqual(10);
     const secs = await time({ action: 'wait_for', seconds: 0.3 });
@@ -241,8 +278,19 @@ describe.skipIf(!enabled)('game input/time/record: process run (headless)', () =
     await new Promise((r) => setTimeout(r, 200));
     expect(await read('ticks')).toBe(t0); // frozen: _process doesn't run
     const stepped = await time({ action: 'step', frames: 3 });
-    expect(stepped).toMatchObject({ stepped: 3, suspended: true });
+    expect(stepped).toMatchObject({ stepped: { frames: 3 }, suspended: true });
+    expect(stepped.frames).toBeUndefined(); // the engine's ever-running counters are not in a step result
     expect(await read('ticks')).toBe(t0 + 3);
+    // Physics ticks: exactly N, whatever the frame rate; the counts are what really ran.
+    const p0 = Number(await read('pticks'));
+    const t1 = Number(await read('ticks'));
+    const one = await time({ action: 'step', physics_ticks: 1 });
+    expect(one.stepped.physics_ticks).toBe(1);
+    expect(await read('pticks')).toBe(p0 + 1);
+    expect(await read('ticks')).toBe(t1 + one.stepped.frames);
+    const five = await time({ action: 'step', physics_ticks: 5 });
+    expect(five.stepped.physics_ticks).toBe(5);
+    expect(await read('pticks')).toBe(p0 + 6);
     // Input while paused is accepted but flagged as discarded (Godot drops it, nothing queues).
     const warn = await input([{ type: 'key', key: 'Space' }]);
     expect(warn.warnings.join(' ')).toMatch(/The game is paused.*discarded/);
@@ -257,7 +305,7 @@ describe.skipIf(!enabled)('game input/time/record: process run (headless)', () =
     expect((await time({ action: 'speed', scale: 1 })).effective_time_scale).toBe(1);
     // Stepping a running game pauses it first.
     const auto = await time({ action: 'step' });
-    expect(auto).toMatchObject({ stepped: 1, paused_first: true, suspended: true });
+    expect(auto).toMatchObject({ stepped: { frames: 1 }, paused_first: true, suspended: true });
     await time({ action: 'resume' });
   }, 60_000);
 
@@ -295,6 +343,17 @@ describe.skipIf(!enabled)('game input/time/record: process run (headless)', () =
     expect(await read('clicks')).toBe(clicks + 3);
     expect(errorText(await call('godot_game_record', { action: 'stop' }))).toMatch(/CONFLICT: Not recording/);
   }, 60_000);
+
+  // Last in this suite: it reloads the scene.
+  it('reports the hit of a click that reloads the scene, and the scene change after it', async () => {
+    const r = await input([{ type: 'click', at: 'Reload' }]);
+    // The button is freed by the reload; its path was captured before that.
+    expect(r.steps[0]).toMatchObject({ hit: 'Reload', hit_target: true, handled: true });
+    // The reload happens at the end of the frame, so the next call is the first to see it.
+    const next = json(await call('godot_game_get', { properties: ['clicks'] }));
+    expect(next).toMatchObject({ scene_changed: 'res://input_test.tscn', properties: { clicks: 0 } });
+    expect(json(await call('godot_game_get', { properties: ['clicks'] })).scene_changed).toBeUndefined();
+  }, 60_000);
 });
 
 describe.skipIf(!enabled)('game input/time: game started from a headless editor (relay)', () => {
@@ -331,7 +390,8 @@ describe.skipIf(!enabled)('game input/time: game started from a headless editor 
     expect(cond.value).toBe(true);
     // Godot's own scene:* debugger commands go through the relay too.
     expect(json(await call('godot_game_time', { action: 'pause' }))).toMatchObject({ run_id: 'editor', suspended: true });
-    expect(json(await call('godot_game_time', { action: 'step', frames: 2 }))).toMatchObject({ stepped: 2, suspended: true });
+    expect(json(await call('godot_game_time', { action: 'step', frames: 2 }))).toMatchObject({ stepped: { frames: 2 }, suspended: true });
+    expect(json(await call('godot_game_time', { action: 'step', physics_ticks: 2 }))).toMatchObject({ stepped: { physics_ticks: 2 }, suspended: true });
     expect(json(await call('godot_game_time', { action: 'resume' }))).toMatchObject({ suspended: false });
   }, 90_000);
 });
@@ -373,8 +433,13 @@ describe.skipIf(!enabled || !process.env.DISPLAY)('windowed game and write_movie
     expect(json(await call('godot_game_time', { action: 'pause' })).suspended).toBe(true);
     const t0 = Number(await read('ticks'));
     // Here SceneDebugger re-suspends on the real frame_post_draw (no headless helper).
-    expect(json(await call('godot_game_time', { action: 'step', frames: 2 }))).toMatchObject({ stepped: 2, suspended: true });
+    expect(json(await call('godot_game_time', { action: 'step', frames: 2 }))).toMatchObject({ stepped: { frames: 2 }, suspended: true });
     expect(await read('ticks')).toBe(t0 + 2);
+    // A drawing game runs as many physics ticks per frame as real time allows (often 2 at
+    // ~30 fps under llvmpipe); physics_ticks still steps exactly one.
+    const p0 = Number(await read('pticks'));
+    expect(json(await call('godot_game_time', { action: 'step', physics_ticks: 1 })).stepped.physics_ticks).toBe(1);
+    expect(await read('pticks')).toBe(p0 + 1);
     await call('godot_game_time', { action: 'resume' });
     await call('godot_run_stop', { run_id: run.run_id });
   }, 60_000);

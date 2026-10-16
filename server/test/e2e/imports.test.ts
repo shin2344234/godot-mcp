@@ -35,8 +35,15 @@ describe.skipIf(!enabled)('imports (headless)', () => {
     const r = json(await call('godot_import_get', { path: 'res://icon.svg' }));
     expect(r).toMatchObject({ importer: 'texture', type: 'CompressedTexture2D', imported: true, backend: 'headless' });
     expect(r.uid).toMatch(/^uid:\/\//);
-    expect(r.options['mipmaps/generate']).toBe(false);
+    // Compact by default: only options that differ from the importer's defaults
+    // (core/import_defaults.cfg); a fresh import has none (MCP_TEST_LOG Phase A).
+    expect(r.options).toEqual({});
+    expect(r.options_shown).toMatch(/^0 of 26 /);
     expect(r.dest_files[0].exists).toBe(true);
+    const full = json(await call('godot_import_get', { path: 'res://icon.svg', full: true }));
+    expect(Object.keys(full.options)).toHaveLength(26);
+    expect(full.options['mipmaps/generate']).toBe(false);
+    expect(full.options_shown).toBeUndefined();
   }, 60_000);
 
   it('changes options and reimports with godot --import', async () => {
@@ -46,8 +53,10 @@ describe.skipIf(!enabled)('imports (headless)', () => {
     const set = json(await call('godot_import_set', { path: 'res://icon.svg', options: { 'mipmaps/generate': true, 'svg/scale': 2 } }));
     expect(set.reimport).toBe('done');
     expect(set.changed).toEqual({ 'mipmaps/generate': true, 'svg/scale': 2 });
-    expect(set.options['mipmaps/generate']).toBe(true);
+    // Only what changed and whether the reimport worked, not every option again.
+    expect(set.options).toBeUndefined();
     expect(set.imported).toBe(true);
+    expect(json(await call('godot_import_get', { path: 'res://icon.svg' })).options).toEqual({ 'mipmaps/generate': true, 'svg/scale': 2 });
     expect(statSync(dest).mtimeMs).toBeGreaterThan(before);
     expect(readFileSync(path.join(proj.dir, 'icon.svg.import'), 'utf8')).toContain('mipmaps/generate=true');
   }, 300_000);
@@ -103,8 +112,9 @@ describe.skipIf(!enabled)('imports (editor)', () => {
     const set = json(await call('godot_import_set', { path: 'res://icon.svg', options: { 'process/fix_alpha_border': false } }));
     expect(set.backend).toBe('editor');
     expect(set.reimport).toBe('done');
-    expect(set.options['process/fix_alpha_border']).toBe(false);
+    expect(set.options).toBeUndefined();
     expect(set.imported).toBe(true);
+    expect(json(await call('godot_import_get', { path: 'res://icon.svg' })).options).toEqual({ 'process/fix_alpha_border': false });
     expect(readFileSync(path.join(proj.dir, 'icon.svg.import'), 'utf8')).toContain('process/fix_alpha_border=false');
   }, 120_000);
 

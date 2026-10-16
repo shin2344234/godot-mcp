@@ -56,8 +56,14 @@ static func tree(root: Node, scene_path: String, params: Variant) -> Dictionary:
 	var res: Dictionary = NodePaths.resolve(root, start_path, "root")
 	if R.is_err(res):
 		return res
-	var state: Dictionary = {"count": 0, "max": max_nodes, "truncated": false}
-	var dump: Dictionary = _dump_node(root, res["value"], 0, depth, include_props, state)
+	var start: Node = res["value"]
+	# Starting at an instanced sub-scene (or inside one) is an explicit request for its own
+	# nodes, so they are listed even without "Editable Children" (marked inside_instance;
+	# node.get works on them too). The 2D dogfood test could read "HUD/Margin" with node.get
+	# but had no way to discover it: scene.tree from the root showed HUD as a leaf.
+	var show_internal: bool = start != root and (not start.scene_file_path.is_empty() or not NodePaths.is_editable(root, start))
+	var state: Dictionary = {"count": 0, "max": max_nodes, "truncated": false, "internal": show_internal}
+	var dump: Dictionary = _dump_node(root, start, 0, depth, include_props, state)
 	return R.ok({
 		"scene": scene_path,
 		"root": dump,
@@ -74,6 +80,11 @@ static func _dump_node(root: Node, node: Node, level: int, max_depth: int, inclu
 	# Internal nodes of an instanced sub-scene are hidden unless "Editable Children" is on;
 	# NodePaths.listed_children applies exactly that rule.
 	var children: Array[Node] = NodePaths.listed_children(root, node)
+	if bool(state.get("internal", false)):
+		children.assign(node.get_children())
+	elif children.size() < node.get_child_count():
+		# An instance whose own nodes are hidden: say how many, and how to list them.
+		info["hidden_children"] = node.get_child_count() - children.size()
 	info["child_count"] = children.size()
 	var out_children: Array = []
 	var truncated: bool = false
@@ -451,11 +462,70 @@ static func plan_node_set(root: Node, params: Variant) -> Dictionary:
 			var wanted: Variant = new_values[pname]
 			if Codec.read_back_differs(now, wanted):
 				warnings.append("'%s' reads back as %s, not the requested value (Godot clamped or adjusted it)." % [pname, JSON.stringify(changed[pname])])
+			var animated: String = animated_by(root, node, pname)
+			if not animated.is_empty():
+				warnings.append(animated)
 		var result: Dictionary = {"path": NodePaths.rel_path(root, node), "changed": changed}
 		if not warnings.is_empty():
 			result["warnings"] = warnings
 		return result
 	return _plan(cs, finish)
+
+
+## A warning when `prop` of `node` is keyed by an animation in the scene, else "".
+##
+## Why: an animated property does not keep the value node.set gives it. At runtime the
+## AnimationPlayer/AnimationTree overwrites it every frame it plays; and in the editor an
+## AnimationTree with active = true is processed live, so the value is overwritten at once
+## and the *animated* value is what gets saved. The dogfood test lost a whole enemy that
+## way: modulate was set back to opaque, the slime's active AnimationTree re-applied
+## alpha 0 and the editor saved it, so every slime was invisible in the game.
+static func animated_by(root: Node, node: Node, prop: String) -> String:
+	var hits: Array[String] = []
+	for mixer: Node in _mixers(root):
+		var m := mixer as AnimationMixer
+		var base: Node = m.get_node_or_null(m.root_node)
+		if base == null:
+			continue
+		for lib_name: StringName in m.get_animation_library_list():
+			var lib: AnimationLibrary = m.get_animation_library(lib_name)
+			for anim_name: StringName in lib.get_animation_list():
+				var anim: Animation = lib.get_animation(anim_name)
+				for t: int in anim.get_track_count():
+					var tt: int = anim.track_get_type(t)
+					if tt != Animation.TYPE_VALUE and tt != Animation.TYPE_BEZIER:
+						continue
+					var tp: NodePath = anim.track_get_path(t)
+					var sub: String = String(tp.get_concatenated_subnames())
+					# "modulate" vs "modulate:a" both count, in either direction.
+					if not (sub == prop or sub.begins_with(prop + ":") or prop.begins_with(sub + ":")):
+						continue
+					if base.get_node_or_null(NodePath(String(tp.get_concatenated_names()))) != node:
+						continue
+					var full: String = String(anim_name) if String(lib_name).is_empty() else "%s/%s" % [lib_name, anim_name]
+					var label: String = "'%s' of %s" % [full, NodePaths.rel_path(root, m)]
+					if not hits.has(label):
+						hits.append(label)
+	if hits.is_empty():
+		return ""
+	var msg: String = "'%s' is keyed by the animation %s, which overrides this value while it plays." % [prop, ", ".join(hits.slice(0, 3))]
+	for mixer: Node in _mixers(root):
+		if mixer is AnimationTree and (mixer as AnimationTree).active and Engine.is_editor_hint():
+			msg += " AnimationTree '%s' is active, and the editor processes active AnimationTrees, so the value is overwritten right away and saved in its animated state; set active = false in the scene (and turn it on from a script) to edit the base value." % NodePaths.rel_path(root, mixer)
+			break
+	return msg
+
+
+## AnimationPlayer/AnimationTree nodes of the scene (editable ones, i.e. saved with it).
+static func _mixers(root: Node) -> Array[Node]:
+	var out: Array[Node] = []
+	var stack: Array[Node] = [root]
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		if n is AnimationMixer and NodePaths.is_editable(root, n):
+			out.append(n)
+		stack.append_array(n.get_children())
+	return out
 
 
 ## Validates and decodes one nested property path for node.set ("material:albedo_color",
@@ -515,6 +585,8 @@ static func plan_node_remove(root: Node, params: Variant) -> Dictionary:
 	if node == root:
 		return R.err(R.BAD_PARAMS, "node.remove: cannot remove the scene root. Remove its children individually, or create a new scene with scene.create.")
 	var edit_err: Dictionary = NodePaths.check_editable(root, node, "remove")
+	if edit_err.is_empty():
+		edit_err = NodePaths.check_structural(root, node, "remove")
 	if not edit_err.is_empty():
 		return edit_err
 	var parent: Node = node.get_parent()
@@ -552,6 +624,8 @@ static func plan_node_rename(root: Node, params: Variant) -> Dictionary:
 		return res
 	var node: Node = res["value"]
 	var edit_err: Dictionary = NodePaths.check_editable(root, node, "rename")
+	if edit_err.is_empty():
+		edit_err = NodePaths.check_structural(root, node, "rename")
 	if not edit_err.is_empty():
 		return edit_err
 	var parent: Node = node.get_parent()
@@ -583,6 +657,8 @@ static func plan_node_reparent(root: Node, params: Variant) -> Dictionary:
 	if node == root:
 		return R.err(R.BAD_PARAMS, "node.reparent: the scene root cannot be moved.")
 	var edit_err: Dictionary = NodePaths.check_editable(root, node, "move")
+	if edit_err.is_empty():
+		edit_err = NodePaths.check_structural(root, node, "move")
 	if not edit_err.is_empty():
 		return edit_err
 	var pres: Dictionary = NodePaths.resolve(root, new_parent_path, "new_parent")

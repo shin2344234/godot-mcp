@@ -256,7 +256,7 @@ For all workspaces, run **MCP: Open User Configuration** from the Command Palett
 code --add-mcp "{\"name\":\"godot\",\"command\":\"npx\",\"args\":[\"-y\",\"@shin2344234/godot-mcp\",\"--project\",\"/path/to/my-game\"]}"
 ```
 
-VS Code asks whether you trust the server the first time it starts. A chat request can use at most 128 tools at once; full mode has 90 (89 plus `godot_tools`), so if you also use other servers, switch to compact mode or fewer toolsets.
+VS Code asks whether you trust the server the first time it starts. A chat request can use at most 128 tools at once; full mode has 91 (90 plus `godot_tools`), so if you also use other servers, switch to compact mode or fewer toolsets.
 
 ## OpenAI Codex (CLI, IDE extension and app)
 
@@ -330,7 +330,7 @@ Older Windsurf versions used `~/.codeium/windsurf/mcp_config.json`. That older p
 }
 ```
 
-Cascade can use at most 100 tools in total across all servers. Full mode has 90 (89 plus `godot_tools`), so use compact mode (`--mode compact`, 17 tools) or a smaller `--toolsets` list.
+Cascade can use at most 100 tools in total across all servers. Full mode has 91 (90 plus `godot_tools`), so use compact mode (`--mode compact`, 17 tools) or a smaller `--toolsets` list.
 
 ## Zed
 

@@ -124,6 +124,10 @@ describe.skipIf(!enabled)('headless backend', () => {
       const out = json(await client.callTool({ name: 'godot_run_output', arguments: { run_id: run.run_id } }));
       if (!out.running) {
         expect(out.lines.length).toBeGreaterThan(0);
+        // Stopping a run that already ended says so, with its exit code.
+        const stop = json(await client.callTool({ name: 'godot_run_stop', arguments: { run_id: run.run_id } }));
+        expect(stop).toMatchObject({ run_id: run.run_id, stopped: false, exit_code: 0 });
+        expect(stop.note).toMatch(/already exited \(code 0\)/);
         return;
       }
       await new Promise((r) => setTimeout(r, 500));

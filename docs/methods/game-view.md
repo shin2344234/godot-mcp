@@ -21,10 +21,12 @@ Returns the picture as an MCP **image content block** (PNG or JPEG) after a smal
 
 ```json
 { "run_id": "3f2a91c0", "width": 768, "height": 432, "scale": 0.6667,
-  "source": { "viewport": "main window", "width": 1152, "height": 648 },
+  "source": { "viewport": "main window", "width": 1152, "height": 648,
+              "game_size": [640, 360] },                     // only with a stretch mode
   "bytes": 2563, "frame": 812,
-  "region": { "x": 100, "y": 100, "w": 200, "h": 100 },        // when given (clipped)
-  "saved_to": "user://shots/ref.png",                        // with save_to
+  "region": { "x": 100, "y": 100, "w": 200, "h": 100 },        // when given (clipped) or framed
+  "framed": "Player",                                        // with a node to frame
+  "saved_to": "user://shots/ref.png", "saved_size": [1152, 648], // with save_to
   "diff": { ... } }                                          // with compare_to
 ```
 
@@ -32,10 +34,37 @@ What is captured (`source: "game"`, runtime method `game.screenshot`):
 
 - default: the main window (`get_tree().root`, a `Window`, i.e. a `Viewport`);
 - `node`: a `Viewport` (`SubViewport`, `Window`), a `SubViewportContainer` (its first
-  `SubViewport` child) or any other node (the viewport it belongs to, e.g. the one a `Camera3D`
-  renders into). Paths are relative to the current scene, or `/root/...`.
+  `SubViewport` child) or a `Camera2D`/`Camera3D` (the whole viewport it renders into) is
+  captured whole. **Any other node is framed**: the capture is cropped to its on-screen
+  bounding rect plus 8 px of padding (game coordinates) in the viewport it is drawn in, and
+  `framed` names it. Paths are relative to the current scene, or `/root/...`. What the rect is:
+  - Control: its rect (`get_global_transform_with_canvas()` × size); hidden ones are refused;
+  - 2D node: the union of the visible things with a size in it and below it: CanvasItems with
+    `get_rect()` (Sprite2D, AnimatedSprite2D...), CollisionShape2D shapes (`Shape2D.get_rect()`),
+    Polygon2D / CollisionPolygon2D points and Controls, each through its own canvas transform
+    (Camera2D, CanvasLayers applied). So a CharacterBody2D `Player` frames its sprite and shape;
+  - 3D node: the AABBs of its VisualInstance3D nodes (meshes, sprites) projected through the
+    viewport's current Camera3D;
+  - anything else (a plain `Node`, a 2D node with nothing visible below it, a node off screen)
+    is a `BAD_PARAMS` error naming what can be framed. Earlier versions silently returned the
+    whole window for such nodes (`node: "Player"` looked like a capture of the player).
+  At most 500 nodes are looked at below the framed one. `node` (to frame) and `region` can't
+  be combined.
 - `region`: a crop in pixels of that viewport's image (before scaling); clipped to the image,
   `BAD_PARAMS` with the image size when it misses it entirely.
+
+**Image pixels vs game coordinates.** `region`, `changed_rect`, `width`/`height` and
+`source.width/height` are pixels of the captured image. Without a stretch mode these equal the
+game's coordinates (what `godot_game_input` `at`, `godot_game_tree` rects and node positions
+use). With one they differ: a 640x360 game in a 1280x720 window with stretch mode
+`canvas_items` is captured at 1280x720 (the root viewport's texture is window-sized; with mode
+`viewport` it is game-sized, 640x360). The result then says `source.game_size: [640, 360]`,
+and `godot_game_input` results say `window: [1280, 720]` next to `viewport`. Framing a node
+converts for you: a window-sized image uses the root's `get_final_transform()` (the stretch,
+including a letterbox offset), anything else the size ratio (verified with 4.7.2 under Xvfb:
+a Sprite2D at game rect (195, 198.75, 40x40) under a 1.25x Camera2D framed as image region
+(373, 381, 113x113)). `region` stays in image pixels because it is an exact crop of the
+returned picture and `changed_rect` can be passed back as `region` unchanged.
 
 How:
 
@@ -62,7 +91,8 @@ display: on Linux `DISPLAY`/`WAYLAND_DISPLAY`, e.g. Xvfb). `godot_game_perf` sti
 
 - `save_to`: a `user://` or `res://` path ending in `.png`, `.jpg` or `.jpeg`; folders are
   created. The **full-resolution** (cropped, unscaled) image is saved, so the file is useful by
-  itself. `user://` is the safe choice in a running game; in the editor, a `res://` file is
+  itself; `saved_size` gives its size (`width`/`height` describe the returned preview, which
+  `max_size` may have scaled down). `user://` is the safe choice in a running game; in the editor, a `res://` file is
   registered with the FileSystem dock (`EditorFileSystem.update_file`).
 - `compare_to`: a previously saved image (same path rules). It is read as raw bytes
   (`FileAccess` + `Image.load_png_from_buffer` / `load_jpg_from_buffer`), not through the
@@ -107,6 +137,13 @@ Bridge method `editor.screenshot` (E), params
   frame after the switch), sending `_retried: true` on the last attempt so the addon then
   fails with `CONFLICT` instead of switching again. The tool result carries
   `switched_main_screen`.
+- The screen the user had open is put back right after the capture (and also when the call
+  gives up with `CONFLICT`), and the result says `restored_main_screen`. EditorInterface has
+  no getter for the current main screen, so the addon reads it from the title bar's screen
+  buttons: toggle `Button`s named after the plugin, theme type variation `MainScreenButton`,
+  only the selected one pressed (`EditorMainScreen::add_main_plugin` / `select`,
+  `editor/editor_main_screen.cpp`, 4.7.2). The retry answer carries `previous_main_screen`,
+  which the server sends back as `_restore`.
 - A headless editor (`--headless`) renders nothing: `UNSUPPORTED` with a hint to use a windowed
   editor or a windowed game. Without a connected editor: `EDITOR_NOT_CONNECTED`.
 - `node` is rejected with editor sources.

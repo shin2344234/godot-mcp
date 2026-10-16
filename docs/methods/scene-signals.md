@@ -23,7 +23,8 @@ of the sub-scene's nodes). `editable_children` calls `set_editable_instance` (`[
 `properties` are overrides on the instance root. Refuses cycles with `BAD_PARAMS`: the instanced
 scene (or any scene it instances, recursively via `ResourceLoader.get_dependencies`) must not be
 the edited scene or any sub-scene the parent lives in. Name collisions auto-rename (`renamed_from`).
-Result: `{ "path": "Enemies/P2", "name": "P2", "type": "CharacterBody2D", "instance": "res://player.tscn", "editable_children": true }`.
+Result: `{ "path": "Enemies/P2", "name": "P2", "type": "CharacterBody2D", "instance": "res://player.tscn", "editable_children": true }`,
+plus `"properties": {...}` (the applied overrides as read back from the node) when `properties` was given.
 (`node.add {instance}` still works; `node.instance` adds the editable flag and the deep cycle check.)
 
 ### scene.inherit (E/H)
@@ -91,7 +92,8 @@ The server only normalizes tool names (`"godot_node_set"` → `"node.set"`) and 
 Each op is planned against the scene *as changed by the previous ops* (add a node, then set its
 properties or connect its signals). Result:
 `{ "count": 3, "results": [{ "method": "node.add", ...that method's result }, ...] }`
-(each result is computed right after its op). If op *k* fails, nothing is applied and the error
+(each result is computed right after its op). A result that has its own `method` field
+(`signal.connect` reports the handler method) keeps it as `"handler"`, since `method` names the op. If op *k* fails, nothing is applied and the error
 keeps the op's code, prefixes the message with `batch.apply: ops[k] (method) failed, so nothing
 was applied:` and has `data: { "failed_index": k, "method", "error_data"? }`.
 

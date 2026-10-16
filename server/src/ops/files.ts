@@ -58,7 +58,16 @@ async function refreshEditor(ctx: OpContext, paths: string[], fullScan = false):
   }
 }
 
-/** Validate a GDScript file after writing it, if any Godot backend is available. */
+/**
+ * Validate a GDScript file after writing it, if any Godot backend is available.
+ *
+ * This is exactly godot_script_validate (the addon's script.validate: a full compile, so
+ * parse errors and analyzer/type errors such as `var x: int = "hello"`). The one limit,
+ * shared by both tools, is Godot's: after a parse (syntax) error the parser stops, so type
+ * errors elsewhere in the same file only show up once the syntax error is fixed. The
+ * dogfood log read that as files_write checking less than script_validate; the tool
+ * descriptions now say both run the same check.
+ */
 async function maybeValidate(ctx: OpContext, p: ProjectPath): Promise<unknown> {
   if (!p.rel.endsWith('.gd')) return undefined;
   try {
@@ -73,25 +82,42 @@ function sidecars(p: ProjectPath): string[] {
   return [p.abs + '.uid', p.abs + '.import'].filter((f) => existsSync(f));
 }
 
+/**
+ * What files.list hides unless `all` is set: Godot's per-file sidecars (`x.gd.uid`,
+ * `x.png.import`), which double a listing without telling anything the resource itself
+ * doesn't, and, when recursing, the contents of res://addons/ (vendored plugins, including
+ * this server's own addon). In the 2D dogfood test a recursive res:// listing came back as
+ * 60 entries of addons/godot_mcp and .uid files, truncated before any of the game's files.
+ * The addons folder itself is still listed, and listing res://addons shows everything.
+ */
+const SIDECAR_EXT = /\.(uid|import)$/i;
+
 export const filesList = defineOp({
   name: 'files.list',
   group: 'files',
   title: 'List files',
-  description: 'Godot files: list a project folder (res://...). Skips .godot/ and .git/. Use recursive with a glob-like "pattern" (e.g. "*.tscn") to find files by type.',
+  description:
+    'Godot files: list a project folder (res://...). Skips .godot/ and .git/; hides .uid/.import sidecars and, when recursive, addons/ contents unless all. Use recursive with a glob-like "pattern" (e.g. "*.tscn") to find files by type.',
   input: z.object({
     path: z.string().default('res://').describe('Folder to list, e.g. "res://scenes".'),
     recursive: z.boolean().default(false),
     pattern: z.string().optional().describe('Filter file names, e.g. "*.gd" or "*player*".'),
+    all: z.boolean().default(false),
     max: z.number().int().min(1).max(5000).default(500),
   }),
   readOnly: true,
   idempotent: true,
   core: true,
-  async run({ path: dir, recursive, pattern, max }, ctx) {
+  async run({ path: dir, recursive, pattern, all, max }, ctx) {
     const root = await resolve(ctx, dir);
     const re = pattern ? globToRegExp(pattern) : undefined;
+    // A pattern naming a sidecar extension ("*.uid") asks for exactly those files.
+    const showSidecars = all || (pattern !== undefined && SIDECAR_EXT.test(pattern));
+    // Listing res://addons or a folder inside it is an explicit request for its files.
+    const inAddons = root.rel === 'addons' || root.rel.startsWith('addons/');
     const entries: { path: string; type: 'file' | 'dir'; size?: number }[] = [];
     let truncated = false;
+    let hidden = 0;
 
     const walk = async (abs: string, rel: string): Promise<void> => {
       let names: string[];
@@ -112,14 +138,23 @@ export const filesList = defineOp({
         if (!st) continue;
         if (st.isDirectory()) {
           if (!re) entries.push({ path: `res://${childRel}`, type: 'dir' });
-          if (recursive) await walk(childAbs, childRel);
+          if (!recursive) continue;
+          if (childRel === 'addons' && !all && !inAddons) {
+            hidden++;
+            continue;
+          }
+          await walk(childAbs, childRel);
+        } else if (!showSidecars && SIDECAR_EXT.test(name)) {
+          hidden++;
         } else if (!re || re.test(name)) {
           entries.push({ path: `res://${childRel}`, type: 'file', size: st.size });
         }
       }
     };
     await walk(root.abs, root.rel);
-    return { data: { path: root.res, count: entries.length, truncated, entries } };
+    // Say that something was left out, so a short listing isn't read as "nothing else there".
+    const note = hidden ? { hidden, hint: 'Hid .uid/.import sidecars and addons/ contents; pass all: true to include them.' } : {};
+    return { data: { path: root.res, count: entries.length, truncated, ...note, entries } };
   },
 });
 
@@ -231,7 +266,7 @@ export const filesWrite = defineOp({
   group: 'files',
   title: 'Write file',
   description:
-    'Godot files: create or overwrite a text file (e.g. a .gd script or .gdshader). GDScript files are syntax-checked after writing. Prefer godot_files_edit for small changes to existing files.',
+    'Godot files: create or overwrite a text file (e.g. a .gd script or .gdshader). GDScript files are then checked for parse and type errors (as godot_script_validate). Prefer godot_files_edit for small changes to existing files.',
   input: z.object({
     path: z.string().describe('File path, e.g. "res://scripts/enemy.gd".'),
     content: z.string(),
@@ -260,7 +295,7 @@ export const filesEdit = defineOp({
   group: 'files',
   title: 'Edit file',
   description:
-    'Godot files: replace an exact snippet in a text file (old_text -> new_text). old_text must match exactly once unless replace_all. GDScript files are syntax-checked after editing.',
+    'Godot files: replace an exact snippet in a text file (old_text -> new_text). old_text must match exactly once unless replace_all. GDScript files are then checked for parse and type errors (as godot_script_validate).',
   input: z.object({
     path: z.string(),
     old_text: z.string().min(1).describe('Exact text to find, including indentation (tabs vs spaces matter in GDScript).'),
@@ -308,11 +343,18 @@ export const filesMove = defineOp({
     if (!existsSync(src.abs)) throw new OpError('NOT_FOUND', `"${src.res}" does not exist.`);
     if (existsSync(dst.abs)) throw new OpError('CONFLICT', `"${dst.res}" already exists.`);
     const newFolder = !existsSync(path.dirname(dst.abs));
+    const isDir = (await stat(src.abs)).isDirectory();
     await mkdir(path.dirname(dst.abs), { recursive: true });
     const moved = sidecars(src);
     await rename(src.abs, dst.abs);
     for (const side of moved) await rename(side, dst.abs + side.slice(src.abs.length));
-    const refreshed = await refreshEditor(ctx, [src.res, dst.res], newFolder);
+    // A live editor needs a full scan for a folder (update_file() takes files only) and
+    // for scripts: the scan is what re-registers a moved class_name in the global class
+    // cache; until then compiling the moved script reports 'Class "X" hides a global
+    // script class' (MCP_TEST_LOG Phase A). Without an editor, the headless runner sees
+    // the cache entry pointing at the old path and refreshes the cache before its next
+    // call (src/project/classCache.ts), and the private LSP editor rescans by itself.
+    const refreshed = await refreshEditor(ctx, [src.res, dst.res], newFolder || isDir || src.rel.endsWith('.gd'));
     return { data: { from: src.res, to: dst.res, sidecars_moved: moved.length, editor_refreshed: refreshed } };
   },
 });

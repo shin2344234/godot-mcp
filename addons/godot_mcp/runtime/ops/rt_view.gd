@@ -62,6 +62,11 @@ static func screenshot(rt: Node, params: Dictionary) -> Dictionary:
 		return picked
 	var vp: Viewport = picked["value"]
 	var label: String = "main window" if vp == rt.get_tree().root else rt.path_of(vp)
+	# A node that is not a viewport is framed: its on-screen rect (viewport coordinates)
+	# becomes the crop region once the image size is known.
+	var frame: Variant = picked.get("frame")
+	if frame != null and params.get("region") != null:
+		return R.err(R.BAD_PARAMS, "Give either 'node' (frames that node) or 'region' (a crop in image pixels), not both. To crop inside a SubViewport, pass the SubViewport as 'node' with a 'region'.")
 
 	# A SubViewport that doesn't update by itself (disabled, or only when visible) is asked
 	# to render once for the capture; its own mode is restored afterwards.
@@ -87,15 +92,63 @@ static func screenshot(rt: Node, params: Dictionary) -> Dictionary:
 	img.convert(Image.FORMAT_RGBA8)
 	if vp.use_hdr_2d and RenderingServer.get_rendering_device() != null:
 		img.linear_to_srgb()
-	var out: Dictionary = process_image(img, params, label)
+	var to_image: Transform2D = _viewport_to_image(vp, img.get_size())
+	var use_params: Dictionary = params
+	if frame != null:
+		var r: Rect2 = to_image * (frame as Rect2)
+		var px := Rect2i(Vector2i(r.position.floor()), Vector2i(r.end.ceil()) - Vector2i(r.position.floor()))
+		if not px.intersects(Rect2i(Vector2i.ZERO, img.get_size())):
+			return R.err(R.BAD_PARAMS, "'%s' is off screen (its rect %s in game coordinates is outside the %s view). Move the camera or the node, or capture the whole window (omit 'node')." %
+				[params["node"], _rect_text(frame as Rect2), _vec_text(vp.get_visible_rect().size)])
+		use_params = params.duplicate()
+		use_params["region"] = {"x": px.position.x, "y": px.position.y, "w": px.size.x, "h": px.size.y}
+	var out: Dictionary = process_image(img, use_params, label)
 	if not R.is_err(out):
-		(out["result"] as Dictionary)["frame"] = Engine.get_process_frames()
+		var res: Dictionary = out["result"]
+		res["frame"] = Engine.get_process_frames()
+		if frame != null:
+			res["framed"] = rt.path_of(picked["node"])
+		# With a stretch mode the image (window pixels in canvas_items mode) is bigger than
+		# the game's own coordinate space (what godot_game_input `at`, godot_game_tree rects
+		# and positions use). Say so once, so region/changed_rect (image pixels) and input
+		# positions (game coordinates) aren't mixed up.
+		var game_size: Vector2 = vp.get_visible_rect().size
+		if not game_size.is_equal_approx(Vector2(img.get_size())):
+			(res["source"] as Dictionary)["game_size"] = [snappedf(game_size.x, 0.1), snappedf(game_size.y, 0.1)]
 	return out
 
 
+## Viewport (game) coordinates -> pixels of the image `vp.get_texture().get_image()`.
+## Verified with 4.7.2 under Xvfb, 640x360 game in a 1280x720 window: with stretch mode
+## canvas_items the root's texture is window-sized (1280x720) and get_final_transform() is
+## the stretch (scale 2; with aspect "keep" and a mismatched window it also holds the
+## letterbox offset); with stretch mode viewport the texture is game-sized (640x360)
+## although get_final_transform() still scales by 2. So: a window-sized image uses the final
+## transform, anything else the plain size ratio (also right for SubViewports, whose image
+## is their own size).
+static func _viewport_to_image(vp: Viewport, img_size: Vector2i) -> Transform2D:
+	if vp is Window and (vp as Window).size == img_size:
+		return (vp as Window).get_final_transform()
+	var vis: Vector2 = vp.get_visible_rect().size
+	if vis.x <= 0.0 or vis.y <= 0.0:
+		return Transform2D.IDENTITY
+	return Transform2D.IDENTITY.scaled(Vector2(img_size) / vis)
+
+
+static func _rect_text(r: Rect2) -> String:
+	return "[%s, %s, %s, %s]" % [snappedf(r.position.x, 0.1), snappedf(r.position.y, 0.1), snappedf(r.size.x, 0.1), snappedf(r.size.y, 0.1)]
+
+
+static func _vec_text(v: Vector2) -> String:
+	return "%sx%s" % [snappedf(v.x, 0.1), snappedf(v.y, 0.1)]
+
+
 ## Viewport to capture: params.node names a Viewport (SubViewport/Window), a
-## SubViewportContainer (its SubViewport), or any node (the viewport it belongs to, e.g.
-## the one a Camera3D renders into). Default: the main window.
+## SubViewportContainer (its SubViewport) or a camera (the whole viewport it renders), else
+## a node to FRAME: {"value": its viewport, "frame": Rect2 (viewport coordinates), "node"}.
+## Default: the main window.
+## Framing used to be missing: node "Player" (a CharacterBody2D) silently returned the whole
+## window, which looked like a capture of the player.
 static func _pick_viewport(rt: Node, params: Dictionary) -> Dictionary:
 	var path: String = str(params.get("node", "")).strip_edges()
 	if path.is_empty():
@@ -111,7 +164,110 @@ static func _pick_viewport(rt: Node, params: Dictionary) -> Dictionary:
 			if child is SubViewport:
 				return R.value(child)
 		return R.err(R.NOT_FOUND, "SubViewportContainer '%s' has no SubViewport child to capture." % path)
-	return R.value(node.get_viewport())
+	if node is Camera2D or node is Camera3D:
+		return R.value(node.get_viewport())
+	var rect: Dictionary = _node_screen_rect(node, path)
+	if R.is_err(rect):
+		return rect
+	var r: Rect2 = rect["value"]
+	return {"value": node.get_viewport(), "frame": r.grow(FRAME_PADDING), "node": node}
+
+
+## Padding around a framed node, in game (viewport) coordinates.
+const FRAME_PADDING: float = 8.0
+## How many nodes are looked at to frame a node (keeps framing a whole level root cheap).
+const FRAME_MAX_NODES: int = 500
+
+
+## The on-screen bounding rect of a node, in its viewport's coordinates (what
+## get_global_transform_with_canvas() maps to, so Camera2D and CanvasLayers are applied):
+##   - Control: its rect (refused while hidden);
+##   - 2D: the union of the visible things that have a size, the node itself and its
+##     descendants: CanvasItems with get_rect() (Sprite2D, AnimatedSprite2D, ...),
+##     CollisionShape2D shapes (Shape2D.get_rect()), Polygon2D / CollisionPolygon2D points,
+##     Controls below it. So a CharacterBody2D "Player" frames its sprite and shape;
+##   - 3D: the union of its VisualInstance3D AABBs (meshes, sprites...) projected through the
+##     viewport's current Camera3D (corners behind the camera are skipped).
+## Errors name what can be framed instead of falling back to the whole window.
+static func _node_screen_rect(node: Node, path: String) -> Dictionary:
+	if node is Control:
+		var c: Control = node
+		if not c.is_visible_in_tree():
+			return R.err(R.BAD_PARAMS, "'%s' is hidden (visible = false), so it has nothing on screen to frame." % path)
+		return R.value(c.get_global_transform_with_canvas() * Rect2(Vector2.ZERO, c.size))
+	var acc: Dictionary = {"rect": Rect2(), "any": false, "seen": 0}
+	if node is CanvasItem:
+		_collect_2d(node as CanvasItem, acc)
+	elif node is Node3D:
+		var cam: Camera3D = node.get_viewport().get_camera_3d()
+		if cam == null:
+			return R.err(R.BAD_PARAMS, "'%s' is a 3D node but its viewport has no current Camera3D, so it has no screen rect. Capture the viewport (omit 'node') instead." % path)
+		_collect_3d(node as Node3D, cam, acc)
+	else:
+		return R.err(R.BAD_PARAMS, ("'%s' is a %s, which is not drawn, so it can't be framed. 'node' takes a Control, a 2D or 3D node with something " +
+			"visible (sprite, mesh, collision shape), a Viewport, SubViewportContainer or camera; or pass 'region' instead.") % [path, node.get_class()])
+	if not acc["any"]:
+		return R.err(R.BAD_PARAMS, ("'%s' (%s) has nothing visible with a size to frame (no Sprite2D/AnimatedSprite2D or other get_rect() node, " +
+			"collision shape, polygon or mesh in it or below it). Pass 'region' (image pixels) or a parent node instead.") % [path, node.get_class()])
+	return R.value(acc["rect"])
+
+
+static func _grow_acc(acc: Dictionary, r: Rect2) -> void:
+	acc["rect"] = r if not acc["any"] else (acc["rect"] as Rect2).merge(r)
+	acc["any"] = true
+
+
+static func _collect_2d(item: CanvasItem, acc: Dictionary) -> void:
+	acc["seen"] += 1
+	if acc["seen"] > FRAME_MAX_NODES or not item.is_visible_in_tree():
+		return
+	if item is Control:
+		var c: Control = item
+		_grow_acc(acc, c.get_global_transform_with_canvas() * Rect2(Vector2.ZERO, c.size))
+	else:
+		var xf: Transform2D = item.get_global_transform_with_canvas()
+		if item is CollisionShape2D:
+			var shape: Shape2D = (item as CollisionShape2D).shape
+			if shape != null:
+				_grow_acc(acc, xf * shape.get_rect())
+		elif item is CollisionPolygon2D:
+			var cpoly: PackedVector2Array = (item as CollisionPolygon2D).polygon
+			if not cpoly.is_empty():
+				_grow_acc(acc, xf * _points_rect(cpoly))
+		elif item is Polygon2D:
+			var poly: PackedVector2Array = (item as Polygon2D).polygon
+			if not poly.is_empty():
+				_grow_acc(acc, xf * _points_rect(poly))
+		elif item.has_method("get_rect"):
+			var r: Variant = item.call("get_rect")
+			if r is Rect2 and (r as Rect2).has_area():
+				_grow_acc(acc, xf * (r as Rect2))
+	for child: Node in item.get_children():
+		if child is CanvasItem:
+			_collect_2d(child as CanvasItem, acc)
+
+
+static func _points_rect(points: PackedVector2Array) -> Rect2:
+	var r := Rect2(points[0], Vector2.ZERO)
+	for p: Vector2 in points:
+		r = r.expand(p)
+	return r
+
+
+static func _collect_3d(item: Node3D, cam: Camera3D, acc: Dictionary) -> void:
+	acc["seen"] += 1
+	if acc["seen"] > FRAME_MAX_NODES or not item.is_visible_in_tree():
+		return
+	if item is VisualInstance3D:
+		var vi: VisualInstance3D = item
+		var box: AABB = vi.global_transform * vi.get_aabb()
+		for k: int in 8:
+			var corner: Vector3 = box.get_endpoint(k)
+			if not cam.is_position_behind(corner):
+				_grow_acc(acc, Rect2(cam.unproject_position(corner), Vector2.ZERO))
+	for child: Node in item.get_children():
+		if child is Node3D:
+			_collect_3d(child as Node3D, cam, acc)
 
 
 ## Resolves after the next frame is drawn, or after FRAME_WAIT_SECONDS at most.
@@ -173,6 +329,9 @@ static func process_image(img: Image, params: Dictionary, label: String) -> Dict
 		if R.is_err(saved):
 			return saved
 		result["saved_to"] = save_to
+		# The file is the full-resolution crop, while width/height below describe the
+		# (possibly scaled-down) preview; without this the saved size was nowhere.
+		result["saved_size"] = [img.get_width(), img.get_height()]
 
 	# Compare BEFORE the preview is scaled down: the diff runs on the full-resolution
 	# (cropped) capture, so a small max_size doesn't make it miss small changes. Earlier

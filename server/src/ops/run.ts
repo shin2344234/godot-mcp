@@ -17,6 +17,7 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { z } from 'zod';
 import { OpError } from '../errors.js';
+import { resolveGame } from '../game/hub.js';
 import { findGodot, GODOT_NOT_FOUND_HINT } from '../godot/binary.js';
 import type { GameRun } from '../godot/runs.js';
 import { log } from '../log.js';
@@ -65,7 +66,7 @@ export const runStart = defineOp({
           // godot_editor_logs reads. The old note pointed at editor_logs, where the game's
           // prints never showed up.
           note:
-            'Started in the editor. godot_game_* tools work on it once its runtime loads. Its print() and error output appears in the editor\'s Output panel only; godot_editor_logs does not include it (that is the editor\'s own log). To capture game output, run with mode "process" and read godot_run_output.',
+            'Started in the editor. godot_game_* tools work on it once its runtime loads. Read its print() and error output with godot_run_output (run_id "editor"); godot_editor_logs is the editor\'s own log.',
         },
       };
     }
@@ -128,13 +129,22 @@ export const runStop = defineOp({
     const run = ctx.runs.get(run_id);
     if (run && run.running) {
       run.stop();
-      return { data: { run_id: run.id, stopped: true } };
+      // Give the process a moment to exit so the result can carry its exit code.
+      const deadline = Date.now() + 2_000;
+      while (run.running && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+      return { data: { run_id: run.id, stopped: true, exit_code: run.exitCode } };
     }
     if (!run_id && (await ctx.bridge.ensureConnected())) {
-      const result = await ctx.bridge.request('run.stop');
-      return { data: { ...(result as object), mode: 'editor' } };
+      const status = (await ctx.bridge.request('editor.status').catch(() => ({}))) as { is_playing?: boolean };
+      if (status.is_playing || !run) {
+        const result = await ctx.bridge.request('run.stop');
+        return { data: { ...(result as object), mode: 'editor', ...(status.is_playing ? { stopped: true } : { stopped: false, note: 'Nothing was running.' }) } };
+      }
     }
     if (run_id && !run) throw new OpError('NOT_FOUND', `No run with id "${run_id}". Known runs: ${ctx.runs.list().map((r) => r.id).join(', ') || 'none'}.`);
+    // The run ended on its own (quit(), a crash, quit_after_frames): say so with its exit code,
+    // instead of a bare "stopped" that reads as if this call had stopped it.
+    if (run) return { data: { run_id: run.id, stopped: false, exit_code: run.exitCode, note: `Run ${run.id} had already exited (code ${run.exitCode}).` } };
     return { data: { stopped: false, note: 'Nothing was running.' } };
   },
 });
@@ -147,7 +157,10 @@ export const runStop = defineOp({
  */
 function errorPage(run: GameRun, since: number, limit: number, level: 'all' | 'warning' | 'error') {
   const where = (f: { file: string; function: string; line: number }) => `${f.file}:${f.line} in ${f.function}()`;
-  let list = run.errors.filter((e) => e.seq >= since);
+  // Start-up noise from the machine's drivers (runs.ts isEnvSource) is left out here and
+  // in the counts; the lines view still shows it, tagged ENV.
+  const real = run.errors.filter((e) => !e.env);
+  let list = real.filter((e) => e.seq >= since);
   if (level === 'error') list = list.filter((e) => e.level === 'error');
   const page = list.slice(0, limit);
   const merged = new Map<string, Record<string, unknown>>();
@@ -170,8 +183,9 @@ function errorPage(run: GameRun, since: number, limit: number, level: 'all' | 'w
     });
   }
   return {
-    error_count: run.errors.filter((e) => e.level === 'error').length,
-    warning_count: run.errors.filter((e) => e.level === 'warning').length,
+    error_count: real.filter((e) => e.level === 'error').length,
+    warning_count: real.filter((e) => e.level === 'warning').length,
+    ...(real.length < run.errors.length ? { environment: run.errors.length - real.length } : {}),
     next: page.length > 0 ? page[page.length - 1]!.seq + 1 : since,
     more: list.length > page.length,
     errors: [...merged.values()],
@@ -183,9 +197,9 @@ export const runOutput = defineOp({
   group: 'run',
   title: 'Game output',
   description:
-    'Godot run: read output and errors from a game started with godot_run_start (process mode). Use level "error" to see only errors, and "since" (the "next" value from the last call) to page.',
+    'Godot run: read output and errors of a game started with godot_run_start (process or editor mode). Use level "error" to see only errors, and "since" (the "next" value from the last call) to page.',
   input: z.object({
-    run_id: z.string().optional().describe('Defaults to the latest run.'),
+    run_id: z.string().optional().describe('Default: the running game (latest run). "editor" for the editor\'s.'),
     since: z.number().int().min(0).default(0),
     limit: z.number().int().min(1).max(2000).default(200),
     level: z.enum(['all', 'warning', 'error']).default('all'),
@@ -195,7 +209,18 @@ export const runOutput = defineOp({
   idempotent: true,
   core: true,
   async run({ run_id, since, limit, level, errors }, ctx) {
-    const run = ctx.runs.get(run_id);
+    const run = run_id === 'editor' ? undefined : ctx.runs.get(run_id);
+    // A game started from the editor writes to the editor's Output panel, which plugins
+    // can't read, so its runtime keeps a copy (runtime/ops/rt_output.gd). Use it when asked
+    // for run_id "editor", or by default when no process run of ours is running.
+    if (run_id === 'editor' || (!run_id && !run?.running)) {
+      const editorGame = await resolveGame(ctx, 'editor').catch(() => undefined);
+      if (editorGame) {
+        const page = (await editorGame.channel.request('rt.output', { since, limit, level, errors: errors ?? false })) as Record<string, unknown>;
+        return { data: { run_id: 'editor', running: true, ...page } };
+      }
+      if (run_id === 'editor') throw new OpError('GAME_NOT_RUNNING', 'No game started from the editor is running (or its runtime has not loaded yet).');
+    }
     if (!run) {
       throw new OpError('NOT_FOUND', run_id ? `No run with id "${run_id}".` : 'No game has been started by this server yet. Use godot_run_start (mode "process" to capture output).');
     }
@@ -212,7 +237,8 @@ export const runOutput = defineOp({
         dropped: page.dropped,
         // "EVAL" marks the output of a failed godot_debug_control evaluate: Godot prints it
         // like a game error, but it isn't one (not counted, not in errors: true).
-        lines: page.lines.map((l) => `${l.seq} ${l.evaluate ? 'EVAL ' : l.level === 'info' ? '' : l.level.toUpperCase() + ' '}${l.text}`),
+        // "ENV" marks start-up noise from the machine's drivers (not counted, see runs.ts).
+        lines: page.lines.map((l) => `${l.seq} ${l.evaluate ? 'EVAL ' : l.env ? 'ENV ' : l.level === 'info' ? '' : l.level.toUpperCase() + ' '}${l.text}`),
       },
     };
   },

@@ -143,6 +143,13 @@ static func plan_node_instance(root: Node, params: Variant) -> Dictionary:
 		}
 		if String(node.name) != desired:
 			result["renamed_from"] = desired
+		if not props.is_empty():
+			# Echo the applied properties as read back, like node.set's "changed", so the
+			# caller does not need a node.get to verify them (MCP_TEST_LOG).
+			var applied: Dictionary = {}
+			for key: Variant in props:
+				applied[str(key)] = Codec.encode(node.get(str(key)), root)
+			result["properties"] = applied
 		return result
 	return {"changes": cs, "finish": finish}
 
@@ -374,6 +381,8 @@ static func plan_node_move(root: Node, params: Variant) -> Dictionary:
 	if node == root:
 		return R.err(R.BAD_PARAMS, "node.move: the scene root has no siblings to reorder.")
 	var edit_err: Dictionary = NodePaths.check_editable(root, node, "move")
+	if edit_err.is_empty():
+		edit_err = NodePaths.check_structural(root, node, "reorder")
 	if not edit_err.is_empty():
 		return edit_err
 	var parent: Node = node.get_parent()
@@ -492,9 +501,12 @@ static func do_scene_close(params: Variant, env: Dictionary) -> Dictionary:
 		if serr != OK:
 			return R.godot_err("Saving '%s' before closing" % path, serr)
 		saved = true
+	# Closing makes another tab current; keep its unsaved state (EditorScenes.restore_unsaved).
+	var dirty_before: PackedStringArray = EditorScenes.unsaved_scenes(ei)
 	var err: int = ei.call(&"close_scene")
 	if err != OK:
 		return R.godot_err("Closing '%s'" % path, err)
+	EditorScenes.restore_unsaved(ei, dirty_before)
 	var now: Node = ei.call(&"get_edited_scene_root")
 	var closed: Variant = null
 	if not path.is_empty():

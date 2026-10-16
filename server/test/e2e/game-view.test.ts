@@ -128,6 +128,9 @@ function writeTestScene(dir: string): void {
 
 [ext_resource type="Script" path="res://view_test.gd" id="1"]
 
+[sub_resource type="RectangleShape2D" id="box"]
+size = Vector2(40, 40)
+
 [node name="ViewTest" type="Node2D"]
 script = ExtResource("1")
 
@@ -150,6 +153,14 @@ offset_top = 300.0
 offset_right = 700.0
 offset_bottom = 400.0
 color = Color(1, 1, 0, 1)
+
+[node name="Thing" type="Node2D" parent="."]
+position = Vector2(800, 500)
+
+[node name="Shape" type="CollisionShape2D" parent="Thing"]
+shape = SubResource("box")
+
+[node name="Logic" type="Node" parent="."]
 
 [node name="Sub" type="SubViewport" parent="."]
 size = Vector2i(64, 64)
@@ -222,6 +233,22 @@ describe.skipIf(!enabled || !hasXvfb)('game view: windowed process run', () => {
     expect(near(png.px(32, 32), GREEN), String(png.px(32, 32))).toBe(true);
   }, 60_000);
 
+  it('frames a node: crops to its on-screen rect plus a little padding', async () => {
+    // A Control: its rect (100,100 200x100) grown by 8 px on every side.
+    const red = json(await call('godot_game_screenshot', { node: 'Red' }));
+    expect(red).toMatchObject({ framed: 'Red', region: { x: 92, y: 92, w: 216, h: 116 }, width: 216, height: 116 });
+    // A Node2D with no size of its own is framed by what is below it (here a 40x40
+    // collision shape centered on 800,500).
+    const thing = json(await call('godot_game_screenshot', { node: 'Thing' }));
+    expect(thing).toMatchObject({ framed: 'Thing', region: { x: 772, y: 472, w: 56, h: 56 } });
+    // Nodes that are not drawn are refused instead of silently capturing the whole window.
+    expect(errorText(await call('godot_game_screenshot', { node: 'Logic' }))).toMatch(/BAD_PARAMS: 'Logic' is a Node, which is not drawn/);
+    expect(errorText(await call('godot_game_screenshot', { node: 'Marker' }))).toMatch(/BAD_PARAMS: 'Marker' is hidden/);
+    expect(errorText(await call('godot_game_screenshot', { node: 'Red', region: { x: 0, y: 0, w: 5, h: 5 } }))).toMatch(/either 'node'.*or 'region'/);
+    // No stretch mode here: the image is in game coordinates, so no game_size is reported.
+    expect(red.source.game_size).toBeUndefined();
+  }, 60_000);
+
   it('reports bad regions and unknown nodes clearly', async () => {
     expect(errorText(await call('godot_game_screenshot', { region: { x: 5000, y: 0, w: 10, h: 10 } }))).toMatch(/outside the 1152x648 image/);
     expect(errorText(await call('godot_game_screenshot', { node: 'Nope' }))).toMatch(/NOT_FOUND.*godot_game_tree/);
@@ -230,6 +257,8 @@ describe.skipIf(!enabled || !hasXvfb)('game view: windowed process run', () => {
   it('saves a reference and diffs later screenshots against it', async () => {
     const saved = json(await call('godot_game_screenshot', { save_to: 'user://mcp_shots/ref.png', max_size: 256 }));
     expect(saved.saved_to).toBe('user://mcp_shots/ref.png');
+    // width/height describe the scaled preview; the file is full size.
+    expect(saved).toMatchObject({ width: 256, saved_size: [1152, 648] });
     const same = json(await call('godot_game_screenshot', { compare_to: 'user://mcp_shots/ref.png' }));
     // The diff runs on the full-resolution capture, whatever max_size the preview has
     // (768 px by default here): the full-size reference needs no scaling.
@@ -333,6 +362,8 @@ describe.skipIf(!enabled || !hasXvfb)('game view: windowed editor', () => {
     await new Promise((r) => setTimeout(r, 1000));
     const result = await call('godot_game_screenshot', { source: 'editor_2d' });
     const r = json(result);
+    // The editor opens this project on the 3D screen: the capture switches to 2D and back.
+    if (r.switched_main_screen) expect(r.restored_main_screen).toBe('3D');
     expect(r.source).toMatchObject({ viewport: 'editor 2D viewport' });
     expect(r.width).toBeGreaterThan(50);
     const png = decodePng(image(result).data);
@@ -345,7 +376,10 @@ describe.skipIf(!enabled || !hasXvfb)('game view: windowed editor', () => {
   it('switches to the 3D screen when asked for the 3D viewport', async () => {
     const result = await call('godot_game_screenshot', { source: 'editor_3d', max_size: 256 });
     const r = json(result);
-    expect(r.switched_main_screen).toBe('3D');
+    // The editor opens this project on the 3D screen, and the editor_2d screenshot before
+    // this test switched back to it after capturing, so no switch is needed here; whenever
+    // a switch does happen, the previous screen is restored.
+    if (r.switched_main_screen) expect(r.restored_main_screen).toBeDefined();
     expect(r.source.viewport).toBe('editor 3D viewport');
     expect(Math.max(r.width, r.height)).toBeLessThanOrEqual(256);
   }, 90_000);
@@ -357,6 +391,8 @@ describe.skipIf(!enabled || !hasXvfb)('game view: windowed editor', () => {
     const result = await call('godot_game_screenshot', { source: 'editor_3d', max_size: 128 });
     const r = json(result);
     expect(r.switched_main_screen).toBe('3D');
+    // The 2D dogfood log: the editor stayed on 3D afterwards. Now the Script screen is back.
+    expect(r.restored_main_screen).toBe('Script');
     expect(r.source.viewport).toBe('editor 3D viewport');
   }, 90_000);
 

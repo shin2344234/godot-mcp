@@ -119,9 +119,17 @@ export async function resolveBreakpoint(projectPath: string, spec: BreakpointSpe
   };
   const here = lines[line - 1]!;
   let warning: string | undefined;
-  if (!isCode(here) || /^\s*(static\s+)?func\s/.test(here)) {
+  // Declarations that compile to no line opcode: `extends`, `class_name`, `signal`,
+  // `const`, `enum`, annotations alone on a line, and member `var`s without an initializer
+  // (a member var WITH one runs at construction, see above). The dogfood test set one on
+  // an `extends` line, got no warning, and waited for a stop that never came.
+  const declaration =
+    /^(extends|class_name|signal|const|enum|@tool|@icon|@static_unload|@export_(category|group|subgroup))\b/.test(here) ||
+    /^@\w+(\(.*\))?\s*$/.test(here) ||
+    (/^(@\w+(\(.*\))?\s+)*(static\s+)?var\s/.test(here) && !/[^=!<>]=[^=]|:=/.test(here.replace(/#.*$/, '')));
+  if (!isCode(here) || /^\s*(static\s+)?func\s/.test(here) || declaration) {
     const n = nextCode();
-    const what = isCode(here) ? 'a func declaration' : 'blank or a comment';
+    const what = !isCode(here) ? 'blank or a comment' : declaration ? 'a declaration' : 'a func declaration';
     warning = `${p.res}:${line} is ${what}; Godot only stops on lines with statements, so it will never trigger.${n ? ` The next code line is ${n}.` : ''}`;
   }
   return { file: p.res, line, ...(warning ? { warning } : {}) };
@@ -204,6 +212,54 @@ async function exitedResult(run: GameRun) {
 export function withPeriod(text: string): string {
   const t = text.trimEnd();
   return /[.!?:]$/.test(t) ? t : `${t}.`;
+}
+
+// --- Opening object variables -----------------------------------------------------
+
+/** How many objects one debug.state call may expand. */
+const MAX_EXPAND = 5;
+
+/**
+ * Engine properties worth showing for common game objects (2D and 3D bodies, sprites,
+ * Controls). Read with Object.get(), which returns null for a property the class doesn't
+ * have, so one list fits every class; nulls are dropped.
+ */
+const COMMON_PROPS = [
+  'position', 'global_position', 'rotation', 'scale', 'velocity', 'linear_velocity', 'angular_velocity',
+  'visible', 'modulate', 'size', 'text', 'animation', 'frame', 'current_animation', 'process_mode',
+];
+
+/**
+ * One level of an object variable: its class, its script variables and the common engine
+ * properties above. Godot's debugger sends object locals as an id and class only
+ * (ScriptStackVariable), so the dogfood test could not see a CharacterBody2D's position or
+ * velocity without typing evaluate expressions by hand. Two evaluate calls in the stopped
+ * frame do it here: the script's property names, then one dictionary of values.
+ */
+async function expandObject(state: DebugState, name: string, frame: number): Promise<unknown> {
+  // Only plain identifiers (locals, members, self): the name is spliced into an expression.
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return { error: `"${name}" is not a variable name.` };
+  const self = await state.evaluate(name, frame);
+  if (self.error) return { error: withPeriod(self.error) };
+  if (self.type !== VARIANT_OBJECT) return { error: `"${name}" is not an object (it is ${JSON.stringify(compact(self.value))}).` };
+  if (self.value === null) return { error: `"${name}" is null.` };
+  const kind = await state.evaluate(`${name}.get_class()`, frame);
+  if (kind.error) return { error: withPeriod(kind.error) };
+  const props = [...COMMON_PROPS];
+  // Script variables (get_script() is null for objects without a script: the evaluate fails then).
+  const listed = await state.evaluate(`${name}.get_script().get_script_property_list()`, frame);
+  if (!listed.error && Array.isArray(listed.value)) {
+    for (const p of listed.value as { name?: unknown; usage?: unknown }[]) {
+      // PROPERTY_USAGE_SCRIPT_VARIABLE (4096) marks real script vars (not groups/categories).
+      if (typeof p?.name === 'string' && (Number(p.usage) & 4096) !== 0 && !props.includes(p.name)) props.push(p.name);
+    }
+  }
+  const expr = `{${props.map((p) => `"${p}": ${name}.get("${p}")`).join(', ')}}`;
+  const values = await state.evaluate(expr, frame);
+  if (values.error) return { class: kind.value, error: withPeriod(values.error) };
+  const out: Record<string, unknown> = { class: kind.value };
+  for (const [k, v] of Object.entries((values.value ?? {}) as Record<string, unknown>)) if (v !== null) out[k] = compact(v);
+  return out;
 }
 
 // --- Tools ----------------------------------------------------------------------
@@ -308,6 +364,7 @@ export const debugControl = defineOp({
 
     const waitMs = (wait ?? (action === 'continue' ? 0 : DEFAULT_WAIT_S)) * 1000;
     let outcome: StopInfo | 'exited' | 'timeout';
+    let stepFrom: StackFrame[] | undefined;
     if (action === 'pause') {
       if (state.stop) {
         const stop = state.stop;
@@ -319,6 +376,9 @@ export const debugControl = defineOp({
       // After a pause there is no stack: "next"/"out" are relative to a frame, so every
       // step becomes "step" (stop at the next GDScript line), like the editor's step does.
       const command = action === 'continue' ? 'continue' : !stop.hasStack ? 'step' : action === 'step_into' ? 'step' : action === 'step_over' ? 'next' : 'out';
+      // step_out: remember where we were and who called us, so the result can say when it
+      // did not land in that caller (see stepOutNote).
+      if (command === 'out') stepFrom = await state.stack();
       outcome = await state.resume(command, waitMs, ctx.signal);
     }
 
@@ -339,7 +399,7 @@ export const debugControl = defineOp({
     const stack = await state.stack();
     const top = stack[0];
     const locals = top ? scopeVars(await state.variables(0), 0) : undefined;
-    const note = stopNote(stop);
+    const note = [stopNote(stop), stepFrom ? stepOutNote(stepFrom, top) : undefined].filter(Boolean).join(' ') || undefined;
     return {
       data: {
         run_id: run.id,
@@ -351,6 +411,25 @@ export const debugControl = defineOp({
   },
 });
 
+/**
+ * step_out runs until the current function returns and stops in its caller. When the
+ * function was called by the engine (a signal, a physics or input callback, a deferred
+ * call) there is no GDScript caller frame, so Godot stops at the next GDScript line that
+ * runs, wherever that is. The 2D dogfood test stepped out of Player.take_hit (called from a
+ * hurtbox's body_entered handler, itself flushed by the physics server) and landed in
+ * slime._physics_process with no word of why. Say so when the stop is not in the caller.
+ */
+export function stepOutNote(from: StackFrame[], top: StackFrame | undefined): string | undefined {
+  const [current, caller] = from;
+  if (!current || !top) return undefined;
+  const where = (f: StackFrame) => `${f.function}() (${f.file}:${f.line})`;
+  if (!caller) {
+    return `${current.function}() had no GDScript caller (the engine called it: a signal, physics or input callback, or a deferred call), so step_out stopped at the next GDScript line that ran: ${where(top)}.`;
+  }
+  if (top.file === caller.file && top.function === caller.function) return undefined;
+  return `Expected to stop in the caller ${where(caller)}, but the next GDScript line that ran was ${where(top)}.`;
+}
+
 export const debugState = defineOp({
   name: 'debug.state',
   group: 'debug',
@@ -360,12 +439,20 @@ export const debugState = defineOp({
     frame: z.number().int().min(0).default(0).describe('Frame for variables (0 = innermost).'),
     variables: z.boolean().default(true),
     globals: z.boolean().default(false).describe('Also globals (autoloads).'),
+    expand: z.array(z.string()).optional().describe('Object variables to open, e.g. ["self","body"].'),
+    wait: z.number().min(0).max(60).optional().describe('Seconds to wait for a stop.'),
     run_id: runId,
   }),
   readOnly: true,
   idempotent: true,
-  async run({ frame, variables, globals, run_id }, ctx) {
+  async run({ frame, variables, globals, expand, wait, run_id }, ctx) {
     const { run, state } = await debugTarget(ctx, run_id);
+    // An action that runs into a breakpoint (a game_input click, a game_edit call) returns
+    // first; the stop arrives a moment later. `wait` covers that gap.
+    if (!state.stop && wait) {
+      const r = await state.waitForStop(wait * 1000, ctx.signal);
+      if (r === 'exited') return { data: await exitedResult(run) };
+    }
     const stop = state.stop;
     if (!stop) {
       return { data: { run_id: run.id, stopped: false, running: true, breakpoints: state.list(), errors: run.errors.filter((e) => e.level === 'error').length } };
@@ -373,7 +460,14 @@ export const debugState = defineOp({
     const stack = await state.stack();
     if (stack.length > 0 && frame >= stack.length) throw new OpError('BAD_PARAMS', `Frame ${frame} doesn't exist; the stack has ${stack.length} frame(s) (0 = innermost).`);
     const vars = variables && stack.length > 0 ? await state.variables(frame) : undefined;
-    const note = stopNote(stop);
+    let note = stopNote(stop);
+    const expanded: Record<string, unknown> = {};
+    if (expand?.length && stack.length > 0) {
+      for (const name of expand.slice(0, MAX_EXPAND)) expanded[name] = await expandObject(state, name, frame);
+    } else if (vars?.some((v) => v.type === VARIANT_OBJECT && v.scope !== 2)) {
+      // Object variables arrive as {object_id, class} only; say how to look inside.
+      note = [note, 'Object variables show only their id and class: pass expand: ["<name>"] (or "self") to read their script variables and common properties.'].filter(Boolean).join(' ');
+    }
     return {
       data: {
         run_id: run.id,
@@ -388,6 +482,7 @@ export const debugState = defineOp({
               ...(globals ? { globals: scopeVars(vars, 2) } : {}),
             }
           : {}),
+        ...(Object.keys(expanded).length ? { expanded } : {}),
         ...(note ? { note } : {}),
       },
     };

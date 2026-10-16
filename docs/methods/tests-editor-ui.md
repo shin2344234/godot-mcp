@@ -127,6 +127,9 @@ Script and the result reads back the current script and the caret of its `CodeEd
 file → `NOT_FOUND` with similar script paths; not a Script → `BAD_PARAMS`; a line past the end
 → `BAD_PARAMS` with the line count. When Editor Settings > Text Editor > External is on, the
 script opens in the external editor and the result says `"external_editor": true`.
+`TextEdit.set_caret_column` clamps to the line's length, so a column past the end of the line
+(any column on an empty line) puts the caret at the line's end; the result then has a `note`
+("Line 40 has 0 characters, so the caret was placed at its end (column 1).").
 
 ### save_all
 

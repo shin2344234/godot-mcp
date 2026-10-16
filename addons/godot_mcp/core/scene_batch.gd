@@ -154,6 +154,11 @@ static func _run(root: Node, steps: Array) -> Dictionary:
 		cs.apply_direct()
 		applied.append(cs)
 		var result: Dictionary = ((plan as Dictionary)["finish"] as Callable).call()
+		# Each entry is tagged with its op's method name. signal.connect / signal.disconnect
+		# results already have a "method" key (the handler, e.g. "_on_hit_body_entered"),
+		# which the tag used to overwrite (MCP_TEST_LOG): keep it as "handler".
+		if result.has("method"):
+			result["handler"] = result["method"]
 		result["method"] = method
 		results.append(result)
 	return {"applied": applied, "results": results}

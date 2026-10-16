@@ -398,6 +398,16 @@ export class DebugState extends EventEmitter {
     });
   }
 
+  /**
+   * Wait up to `waitMs` for the game to stop (breakpoint, error, pause) without sending
+   * anything: for debug.state {wait}, right after an action that is about to hit a
+   * breakpoint (the stop arrives a moment after the action's own reply).
+   */
+  async waitForStop(waitMs: number, signal?: AbortSignal): Promise<StopInfo | 'exited' | 'timeout'> {
+    if (this.stop) return this.stop;
+    return this.nextStop(waitMs, signal);
+  }
+
   /** Resolves with the next stop, "exited" when the game disconnects, or "timeout". */
   private nextStop(timeoutMs: number, signal?: AbortSignal): Promise<StopInfo | 'exited' | 'timeout'> {
     return new Promise((resolve) => {

@@ -157,6 +157,12 @@ describe.skipIf(!enabled)('debug: process runs', () => {
       expect(s.members.self).toMatchObject({ class: 'Node' });
       expect(s.members.self.object_id).toMatch(/^\d+$/);
       expect(s.globals).toBeUndefined();
+      // Object variables come as id + class; the note says how to open them, and expand does.
+      expect(s.note).toMatch(/expand: \["<name>"\]/);
+      const ex = json(await call('godot_debug_state', { run_id, variables: false, expand: ['self', 'counter', 'nope'] }));
+      expect(ex.expanded.self).toEqual({ class: 'Node', counter: 0, label_text: 'hello', process_mode: 0 });
+      expect(ex.expanded.counter.error).toMatch(/not an object/);
+      expect(ex.expanded.nope.error).toBeTruthy();
       const g = json(await call('godot_debug_state', { run_id, globals: true }));
       expect(g.globals.GameState).toMatchObject({ class: 'Node' });
       // The breakpoint list is seeded from godot_run_start.
@@ -177,6 +183,8 @@ describe.skipIf(!enabled)('debug: process runs', () => {
       expect(caller.stack[1].code).toBe('var doubled := twice(counter)');
       r = json(await call('godot_debug_control', { action: 'step_out' }));
       expect(r).toMatchObject({ stopped: true, reason: 'step', at: { line: 10, function: '_on_tick' }, depth: 1, locals: { doubled: 2 } });
+      // It landed in the caller, so there is nothing to explain.
+      expect(r.note).toBeUndefined();
     }, 60_000);
 
     it('evaluates expressions in a frame, and reports bad ones without resuming', async () => {
@@ -227,6 +235,11 @@ describe.skipIf(!enabled)('debug: process runs', () => {
       await new Promise((r) => setTimeout(r, 700));
       expect(json(await call('godot_debug_state', {}))).toMatchObject({ stopped: false, running: true, breakpoints: [] });
       expect(errorText(await call('godot_debug_control', { action: 'step_over' }))).toMatch(/running, not stopped/);
+      // debug_state {wait} waits for the next stop instead of answering "running" at once.
+      json(await call('godot_debug_breakpoints', { action: 'add', breakpoints: ['res://dbg.gd:8'] }));
+      expect(json(await call('godot_debug_state', { wait: 5, variables: false }))).toMatchObject({ stopped: true, reason: 'breakpoint', stack: [{ line: 8 }] });
+      json(await call('godot_debug_breakpoints', { action: 'clear' }));
+      json(await call('godot_debug_control', { action: 'continue' }));
     }, 60_000);
 
     it('validates breakpoints against the project', async () => {
@@ -237,9 +250,10 @@ describe.skipIf(!enabled)('debug: process runs', () => {
       expect(errorText(await call('godot_debug_breakpoints', { action: 'add', breakpoints: ['../outside.gd:1'] }))).toMatch(/escapes the project/);
       expect(errorText(await call('godot_debug_breakpoints', { action: 'add' }))).toMatch(/needs breakpoints/);
       // Lines that can never stop are added with a warning.
-      const w = json(await call('godot_debug_breakpoints', { action: 'add', breakpoints: ['res://dbg.gd:12', 'res://dbg.gd:7'] }));
+      const w = json(await call('godot_debug_breakpoints', { action: 'add', breakpoints: ['res://dbg.gd:12', 'res://dbg.gd:7', 'res://dbg.gd:1'] }));
       expect(w.warnings[0]).toMatch(/dbg\.gd:12 is blank or a comment; .* never trigger\. The next code line is 15\./);
       expect(w.warnings[1]).toMatch(/dbg\.gd:7 is a func declaration; .* The next code line is 8\./);
+      expect(w.warnings[2]).toMatch(/dbg\.gd:1 is a declaration; .* never trigger/);
       json(await call('godot_debug_breakpoints', { action: 'clear' }));
     }, 60_000);
 

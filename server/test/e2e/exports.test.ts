@@ -123,7 +123,14 @@ describe.skipIf(!enabled)('export tools (headless)', () => {
     expect(errorText(await call('godot_export_preset_set', { create: { name: 'X', platform: 'Amiga' } }))).toContain('Valid platforms');
     expect(errorText(await call('godot_export_preset_set', { preset: 'Linux', set: { 'binary_format/embedpck': true } }))).toContain('Did you mean: binary_format/embed_pck');
     expect(errorText(await call('godot_export_preset_set', { preset: 'Linux', set: { 'keystore/release_password': 'x' } }))).toContain('export_credentials.cfg');
-    expect(errorText(await call('godot_export_preset_set', { preset: 'Linux', set: { 'ssh_remote_deploy/host': 'me@host' } }))).toContain('allow_secrets');
+    // A secret option the preset has (a created preset has every option) still needs allow_secrets;
+    // on the hand-written 'Linux' preset, which lacks it, the unknown-option check comes first.
+    expect(errorText(await call('godot_export_preset_set', { preset: 'Linux ARM', set: { 'ssh_remote_deploy/host': 'me@host' } }))).toContain('allow_secrets');
+    expect(errorText(await call('godot_export_preset_set', { preset: 'Linux', set: { 'ssh_remote_deploy/host': 'me@host' } }))).toContain('allow_new_keys');
+    // An unknown name containing "key" is a typo first, not a secret (MCP_TEST_LOG Phase A).
+    const bogus = errorText(await call('godot_export_preset_set', { preset: 'Linux', set: { bogus_key: 1 } }));
+    expect(bogus).toContain("has no option 'bogus_key'");
+    expect(bogus).not.toContain('looks like a secret');
     expect(errorText(await call('godot_export_preset_set', { preset: 'Linux', set: { export_filter: 'everything' } }))).toContain('all_resources');
   }, 60_000);
 
@@ -143,6 +150,8 @@ describe.skipIf(!enabled)('export tools (headless)', () => {
     expect(res.files).toHaveLength(1);
     expect(res.files[0].size).toBeGreaterThan(1000);
     expect(statSync(path.join(proj.dir, 'build', 'game.pck')).size).toBe(res.files[0].size);
+    // Per-file progress lines feed progress notifications, not the tail (MCP_TEST_LOG Phase A).
+    expect(res.tail.filter((l: string) => /Storing File|^\[\s*\d+%/.test(l))).toEqual([]);
   }, 600_000);
 
   it('export.run validates preset and output', async () => {

@@ -90,13 +90,27 @@ them through untouched:
 | game → server | `mcp:hello` | `[json]`, json = `{"protocol": 1, "godot_version", "pid", "current_scene", "display", "methods": [...]}` (once, when ready) |
 | game → server | `mcp:event` | `[json]`, json = `{"event": "name", ...}` (unsolicited) |
 
+**`scene_changed`.** Replies of the methods an agent chains on the current scene
+(`game.tree`, `game.get`, `game.edit`, `game.eval`, `input.run`, `time.wait_for`,
+`game.screenshot`) get `"scene_changed": "res://level_1.tscn"` (the new scene's file, or its
+name) when the current scene is a different instance than at the end of the previous such
+reply. A game that reloads its level by itself (game over, "Play again") otherwise gave no
+sign of it: a `game.edit` set or call silently hit the new scene's nodes. Instance ids change
+on every reload, also of the same file; the check runs when a request ends, so a change made
+by that request (a click on "Restart", `change_scene`) is reported too, and while a change is
+in progress (no current scene yet) the hint waits for the next reply. On an error reply the
+hint is appended to the message instead (it explains a `NOT_FOUND` for a node of the old
+scene). Server-internal calls (`time.state`, `time.step_wait`, `rt.output`) neither carry nor
+consume it (`SCENE_TRACKED` in `mcp_runtime.gd`).
+
 Runtime methods live in `addons/godot_mcp/runtime/ops/rt_*.gd`, each with
 `static func methods() -> Dictionary` mapping a method name to `{"fn": Callable(rt, params)}`.
 `fn` returns the usual `{"result": {...}}` / `{"error": {...}}` (`core/mcp_result.gd`) and
 may be a coroutine (`await rt.get_tree().process_frame`, signals...); other requests keep
 being served while one waits. Helpers on `rt` (the autoload node): `scene_root()`,
 `find_node(path)` (relative to the current scene, or absolute `/root/...`, errors list
-how to find nodes), `path_of(node)`, `encode(value)`, `send_event(name, data)`.
+how to find nodes), `path_of(node)`, `encode(value)`, `send_event(name, data)`,
+`expression_globals(code, inputs)` (autoloads and singletons for an `Expression`).
 
 The runtime node runs with `PROCESS_MODE_ALWAYS`, so it keeps answering while the
 SceneTree is paused.

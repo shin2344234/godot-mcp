@@ -15,7 +15,7 @@ export function buildInstructions(mode: ToolMode): string {
     'Godot 4 game engine tools (scenes, nodes, scripts, running the game, errors). Your training data may predate Godot 4.7: prefer Godot 4 APIs (e.g. CharacterBody2D, @export, signal.connect(callable)), never Godot 3 syntax.',
     'Workflow: call godot_status first. It says whether the live editor is connected; if so, scene/node edits happen in the editor and are undoable by the user (save with godot_scene_save). If not, edits are applied headlessly to .tscn files and you must pass "scene".',
     'Paths are res:// paths. Node paths are relative to the scene root ("." is the root).',
-    'Edit scenes through the scene/node tools rather than hand-editing .tscn text. Edit scripts with godot_files_edit / godot_files_write; GDScript is syntax-checked automatically.',
+    'Edit scenes through the scene/node tools rather than hand-editing .tscn text. Edit scripts with godot_files_edit / godot_files_write; GDScript is compiled automatically (parse and type errors).',
     'To test: godot_run_start (mode "process" captures output), then godot_run_output with errors: true.',
     // Step 3: tools that act on the running game.
     'While the game runs: godot_game_tree / godot_game_get to see live state, godot_game_input to play it, godot_game_time to pause or step frames, godot_game_screenshot to look. Breakpoints: godot_debug_* (process runs).',

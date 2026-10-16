@@ -124,6 +124,20 @@ function catalogEntry(op: Operation) {
   return { operation: op.name, tool: toolName(op), group: op.group, read_only: op.readOnly, description: op.description };
 }
 
+/**
+ * godot_tools search without a query: every operation as "name: title" (plus " (read)"
+ * for read-only ones, which godot_call_read accepts), grouped by area in catalog order.
+ */
+export function catalogIndex(ops: Operation[]) {
+  const groups: Record<string, string[]> = {};
+  for (const op of ops) (groups[op.group] ??= []).push(`${op.name}: ${op.title}${op.readOnly ? ' (read)' : ''}`);
+  return {
+    count: ops.length,
+    hint: 'Tool name = "godot_" + operation with "." -> "_". Search with keywords for descriptions, or describe operations for their schemas.',
+    groups,
+  };
+}
+
 const HOUR = 60 * 60 * 1000;
 
 export function buildServer(config: Config, services: Omit<OpContext, 'signal'>): McpServer {
@@ -179,7 +193,7 @@ export function buildServer(config: Config, services: Omit<OpContext, 'signal'>)
         (config.mode === 'compact' ? ' Run them with godot_call_read / godot_call_write.' : ''),
       inputSchema: compactInput(z.object({
         action: z.enum(['search', 'describe']),
-        query: z.string().optional().describe('search: keywords, e.g. "animation" or "delete node". Empty lists everything.'),
+        query: z.string().optional().describe('search: keywords, e.g. "animation" or "delete node". Empty: names only.'),
         operations: z.array(z.string()).optional().describe('describe: operation names from search, e.g. ["node.reparent"].'),
       })),
       annotations: { readOnlyHint: true, openWorldHint: false },
@@ -187,6 +201,10 @@ export function buildServer(config: Config, services: Omit<OpContext, 'signal'>)
     (async ({ action, query, operations }: { action: 'search' | 'describe'; query?: string; operations?: string[] }) => {
       if (action === 'search') {
         const words = (query ?? '').toLowerCase().split(/\s+/).filter(Boolean);
+        // No keywords: an index, not the full catalog. With every description the whole
+        // list was ~9k tokens (MCP_TEST_LOG); "name: title" grouped by area is about a
+        // tenth of that and enough to pick operations to search or describe next.
+        if (words.length === 0) return toToolResult({ data: catalogIndex(ops) });
         const hits = ops.filter((op) => {
           const hay = `${op.name} ${op.group} ${op.title} ${op.description}`.toLowerCase();
           return words.every((w) => hay.includes(w));

@@ -184,7 +184,7 @@ describe.skipIf(!enabled || !gutDir)('test.run: GUT', () => {
     const r = json(await call({}, { onprogress: (p) => progress.push(String(p.message)), timeout: 600_000 }));
     expect(r).toMatchObject({ framework: 'gut', version: '9.7.1', status: 'failed', exit_code: 1 });
     expect(r.totals).toMatchObject({ tests: 7, passed: 3, failed: 3, errors: 0, skipped: 1 });
-    expect(r.failures).toContainEqual({ test: 'test_fails', file: 'res://test/unit/test_math.gd', line: 7, message: '[1] expected to equal [2]:  one is not two' });
+    expect(r.failures).toContainEqual({ test: 'test_fails', file: 'res://test/unit/test_math.gd', line: 7, message: 'got [1], expected to equal [2]: one is not two' });
     expect(r.failures).toContainEqual({ test: 'test_inner_bad', class: 'TestInner', file: 'res://test/unit/test_math.gd', line: 17, message: 'inner broken' });
     // GUT reports "at line -1" for engine errors; the line comes from Godot's output instead.
     expect(r.failures).toContainEqual(expect.objectContaining({ test: 'test_runtime_error', file: 'res://test/test_errors.gd', line: 5 }));
@@ -339,6 +339,13 @@ describe.skipIf(!enabled)('editor.ui', () => {
     const r = json(await ui({ action: 'open_script', script: 'main.gd', line: 5, column: 2 }));
     expect(r).toMatchObject({ script: 'res://main.gd', line: 5, column: 2, current_script: 'res://main.gd' });
     if (r.caret) expect(r.caret).toEqual({ line: 5, column: 2 });
+    // Line 3 of main.gd is empty: TextEdit clamps the column, and the reply says so.
+    const empty = json(await ui({ action: 'open_script', script: 'main.gd', line: 3, column: 5 }));
+    expect(empty.caret).toBeDefined();
+    if (empty.caret) {
+      expect(empty.caret).toEqual({ line: 3, column: 1 });
+      expect(empty.note).toMatch(/Line 3 has 0 characters, so the caret was placed at its end \(column 1\)/);
+    }
     expect(errorText(await ui({ action: 'open_script', script: 'res://main.gd', line: 99 }))).toMatch(/has \d+ lines; 'line' 99 is past the end/);
     expect(errorText(await ui({ action: 'open_script', script: 'res://mian.gd' }))).toMatch(/^NOT_FOUND: .*Did you mean: res:\/\/main\.gd/);
   }, 60_000);

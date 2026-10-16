@@ -48,6 +48,13 @@ describe.each(['legacy', 'modern'] as const)('protocol era: %s', (era) => {
     expect(found.matches.some((m: { path: string }) => m.path === `res://notes_${era}.txt`)).toBe(true);
   });
 
+  it('godot_tools search without a query returns a compact index', async () => {
+    const index = json(await client.callTool({ name: 'godot_tools', arguments: { action: 'search' } }));
+    expect(index.groups.files).toContain('files.read: Read file (read)');
+    expect(index.operations).toBeUndefined();
+    expect(index.count).toBeGreaterThan(50);
+  });
+
   it('refuses paths outside the project', async () => {
     const res = await client.callTool({ name: 'godot_files_read', arguments: { path: '../../etc/passwd' } });
     expect(errorText(res)).toMatch(/escapes the project/);

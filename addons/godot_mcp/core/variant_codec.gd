@@ -217,6 +217,56 @@ static func encode_object_properties(obj: Object, root: Node, depth: int = 1, om
 			omitted[0] = int(omitted[0]) + 1
 			continue
 		out[pname] = encode(v, root, depth)
+	if obj is Curve2D or obj is Curve3D:
+		out["points"] = curve_points(obj)
+	return out
+
+
+## Maximum curve points listed by curve_points().
+const MAX_CURVE_POINTS: int = 100
+
+
+## The points of a Curve2D/Curve3D, compactly: [x, y(, z)] for a point without handles,
+## {"position", "in", "out"(, "tilt")} otherwise. Needed because a curve stores its points
+## in the internal `_data` property and lists them only as editor-only "point_N/..."
+## properties, so stored-property readbacks (node.get on a Path2D, node.set) showed nothing
+## but point_count (MCP_TEST_LOG). Points are edited with node.set "curve:point_0/position".
+static func curve_points(curve: Object) -> Array:
+	var out: Array = []
+	var count: int = curve.get("point_count")
+	var is_3d: bool = curve is Curve3D
+	var zero: Variant = Vector2.ZERO
+	if is_3d:
+		zero = Vector3.ZERO
+	for i: int in range(mini(count, MAX_CURVE_POINTS)):
+		var pos: Variant = curve.call("get_point_position", i)
+		var p_in: Variant = curve.call("get_point_in", i)
+		var p_out: Variant = curve.call("get_point_out", i)
+		var tilt: float = 0.0
+		if is_3d:
+			tilt = curve.call("get_point_tilt", i)
+		if p_in == zero and p_out == zero and tilt == 0.0:
+			out.append(_components(pos))
+		else:
+			var entry: Dictionary = {"position": _components(pos), "in": _components(p_in), "out": _components(p_out)}
+			if tilt != 0.0:
+				entry["tilt"] = tilt
+			out.append(entry)
+	if count > MAX_CURVE_POINTS:
+		out.append("…(+%d more)" % (count - MAX_CURVE_POINTS))
+	return out
+
+
+## Vector2/Vector3 -> [x, y(, z)] with whole numbers as ints.
+static func _components(v: Variant) -> Array:
+	var out: Array = []
+	var n: int = 3 if v is Vector3 else 2
+	for i: int in range(n):
+		var f: float = v[i]
+		if f == floorf(f) and absf(f) < 1e9:
+			out.append(int(f))
+		else:
+			out.append(f)
 	return out
 
 
@@ -243,6 +293,8 @@ static func find_property(obj: Object, prop: String) -> Dictionary:
 			var usage: int = info["usage"]
 			if usage & (PROPERTY_USAGE_GROUP | PROPERTY_USAGE_SUBGROUP | PROPERTY_USAGE_CATEGORY):
 				return {}
+			if is_array_header(info):
+				return {}
 			return info
 	if prop.begins_with("metadata/") and prop.length() > 9:
 		return {"name": prop, "type": TYPE_NIL, "hint": PROPERTY_HINT_NONE, "hint_string": "", "usage": PROPERTY_USAGE_DEFAULT, "class_name": &""}
@@ -258,8 +310,19 @@ static func property_names(obj: Object) -> Array[String]:
 			continue
 		if (usage & (PROPERTY_USAGE_STORAGE | PROPERTY_USAGE_EDITOR)) == 0:
 			continue
+		if is_array_header(info):
+			continue
 		out.append(str(info["name"]))
 	return out
+
+
+## True for the inspector's array headers that engine classes add with ADD_ARRAY (C++):
+## e.g. TileSet "physics_layers", "navigation_layers", "occlusion_layers" are listed as
+## {type: NIL, usage: EDITOR | ARRAY} (verified on 4.7.2) but are not properties: set()
+## ignores them and get() returns null. The real values live in "physics_layer_0/..." etc.
+## Array COUNT properties ("point_count", type INT with the ARRAY flag) are real and kept.
+static func is_array_header(info: Dictionary) -> bool:
+	return int(info.get("type", TYPE_NIL)) == TYPE_NIL and (int(info.get("usage", 0)) & PROPERTY_USAGE_ARRAY) != 0
 
 
 ## NOT_FOUND error for an unknown property, with up to 10 similar names.
@@ -310,7 +373,7 @@ static func decode_typed(value: Variant, info: Dictionary, root: Node, obj: Obje
 			if value is String and (value as String).to_lower() in ["true", "false"]:
 				return R.value((value as String).to_lower() == "true")
 		TYPE_INT:
-			return _decode_int(value, info)
+			return _decode_int(value, info, obj)
 		TYPE_FLOAT:
 			if value is float or value is int:
 				return R.value(float(value))
@@ -414,7 +477,7 @@ static func _looks_like_constructor(s: String) -> bool:
 	return re.search(s.strip_edges()) != null
 
 
-static func _decode_int(value: Variant, info: Dictionary) -> Dictionary:
+static func _decode_int(value: Variant, info: Dictionary, obj: Object = null) -> Dictionary:
 	var prop: String = str(info.get("name", "value"))
 	if value is int:
 		return R.value(value)
@@ -428,52 +491,161 @@ static func _decode_int(value: Variant, info: Dictionary) -> Dictionary:
 		var s: String = (value as String).strip_edges()
 		if s.is_valid_int():
 			return R.value(s.to_int())
-		var enum_value: Variant = _lookup_enum(s, info)
+		var enum_value: Variant = _lookup_enum(s, info, obj)
 		if enum_value != null:
 			return R.value(enum_value)
-		var names: PackedStringArray = _enum_names(info)
+		var names: PackedStringArray = _enum_names(info, obj)
 		if not names.is_empty():
-			return _type_error(prop, TYPE_INT, value, "valid names for this enum: %s (or their integer values)" % ", ".join(names))
+			return _type_error(prop, TYPE_INT, value, "valid values for this enum: %s; pass the name or the number" % ", ".join(names))
 	return _type_error(prop, TYPE_INT, value)
 
 
-## Resolves an enum constant name for an int property. Accepts the inspector labels from
-## hint_string ("Floating" for motion_mode) as well as the C++/GDScript constant names
-## ("MOTION_MODE_FLOATING") when the property declares its enum class.
-static func _lookup_enum(s: String, info: Dictionary) -> Variant:
+## Resolves an enum name for an int property. Accepted, case/space/underscore-insensitive:
+## * the inspector labels from hint_string ("Floating" for motion_mode, "Texture2D" for
+##   VisualShaderNodeTexture.source);
+## * the C++/GDScript constant names ("MOTION_MODE_FLOATING", "SOURCE_2D_TEXTURE",
+##   "OP_TYPE_VECTOR_3D_SCALAR"), with or without the enum's common prefix ("2D_TEXTURE",
+##   "VECTOR_3D_SCALAR").
+## Constant names matter because the labels and the documented constants often differ:
+## VisualShaderNodeMix.op_type's label is "Vector3Scalar" while the class reference says
+## OP_TYPE_VECTOR_3D_SCALAR, and the source label "Texture" is SOURCE_TEXTURE, not the 2D
+## texture (MCP_TEST_LOG: both were guessed wrong by number). `obj` lets us find the enum
+## when the property info itself does not name it (see _enum_ref).
+static func _lookup_enum(s: String, info: Dictionary, obj: Object = null) -> Variant:
 	var want: String = _norm_enum(s)
-	var hint: int = info.get("hint", PROPERTY_HINT_NONE)
-	if hint == PROPERTY_HINT_ENUM or hint == PROPERTY_HINT_ENUM_SUGGESTION:
-		var next_value: int = 0
-		for item: String in str(info.get("hint_string", "")).split(","):
-			var label: String = item
-			var val: int = next_value
-			var colon: int = item.rfind(":")
-			if colon >= 0 and item.substr(colon + 1).strip_edges().is_valid_int():
-				label = item.left(colon)
-				val = item.substr(colon + 1).strip_edges().to_int()
-			if _norm_enum(label) == want:
-				return val
-			next_value = val + 1
-	# "CharacterBody2D.MotionMode" -> look up constants of that native enum.
-	var cls_enum: String = str(info.get("class_name", ""))
-	if cls_enum.contains("."):
-		var cls: String = cls_enum.get_slice(".", 0)
-		var enum_name: String = cls_enum.get_slice(".", 1)
-		if ClassDB.class_exists(cls):
-			for c: String in ClassDB.class_get_enum_constants(cls, enum_name):
-				if _norm_enum(c) == want or _norm_enum(c).ends_with(want):
-					return ClassDB.class_get_integer_constant(cls, c)
+	for entry: Array in _hint_entries(info):
+		if _norm_enum(entry[0]) == want:
+			return entry[1]
+	var consts: Dictionary = _enum_constants(info, obj)
+	if consts.is_empty():
+		return null
+	var prefix: String = _common_prefix(consts.keys())
+	var tail_hits: Array[String] = []
+	for c: String in consts:
+		if _norm_enum(c) == want or _norm_enum(c.trim_prefix(prefix)) == want:
+			return consts[c]
+		if _norm_enum(c).ends_with(want):
+			tail_hits.append(c)
+	# Last resort: a unique suffix ("FLOATING"), never an ambiguous one ("TEXTURE" would
+	# match SOURCE_TEXTURE and SOURCE_2D_TEXTURE).
+	if tail_hits.size() == 1:
+		return consts[tail_hits[0]]
 	return null
 
 
-static func _enum_names(info: Dictionary) -> PackedStringArray:
-	var out: PackedStringArray = []
+## [label, value] pairs of a PROPERTY_HINT_ENUM hint_string ("A,B:5,C" -> A=0, B=5, C=6).
+static func _hint_entries(info: Dictionary) -> Array:
+	var out: Array = []
 	var hint: int = info.get("hint", PROPERTY_HINT_NONE)
-	if hint == PROPERTY_HINT_ENUM or hint == PROPERTY_HINT_ENUM_SUGGESTION:
-		for item: String in str(info.get("hint_string", "")).split(","):
-			out.append(item.get_slice(":", 0))
+	if hint != PROPERTY_HINT_ENUM and hint != PROPERTY_HINT_ENUM_SUGGESTION:
+		return out
+	var next_value: int = 0
+	for item: String in str(info.get("hint_string", "")).split(",", false):
+		var label: String = item
+		var val: int = next_value
+		var colon: int = item.rfind(":")
+		if colon >= 0 and item.substr(colon + 1).strip_edges().is_valid_int():
+			label = item.left(colon)
+			val = item.substr(colon + 1).strip_edges().to_int()
+		out.append([label, val])
+		next_value = val + 1
 	return out
+
+
+## The native enum behind an int property as "Class.Enum", or "". The property info names
+## it for some classes ("CharacterBody2D.MotionMode"), but many engine properties are
+## registered with an empty class_name (all VisualShaderNode enums, verified on 4.7.2). Their
+## setter's argument still carries the enum ("set_source(value: VisualShaderNodeTexture.Source)"),
+## so we look there. Global enums ("HorizontalAlignment") are not in ClassDB and return "".
+static func _enum_ref(info: Dictionary, obj: Object) -> String:
+	var ref: String = str(info.get("class_name", ""))
+	if ref.contains(".") or obj == null:
+		return ref if ref.contains(".") else ""
+	var prop: String = str(info.get("name", ""))
+	var cls: String = obj.get_class()
+	if prop.is_empty():
+		return ""
+	# "" for script and dynamic properties (no error printed, verified on 4.7.2).
+	var setter: StringName = ClassDB.class_get_property_setter(cls, prop)
+	if setter == &"":
+		return ""
+	for m: Dictionary in ClassDB.class_get_method_list(cls):
+		if m["name"] == setter:
+			var args: Array = m["args"]
+			if args.is_empty():
+				return ""
+			var cn: String = str((args[args.size() - 1] as Dictionary).get("class_name", ""))
+			return cn if cn.contains(".") else ""
+	return ""
+
+
+## constant name -> value for the property's native enum (without the "<PREFIX>_MAX"
+## sentinel), or {} when unknown.
+static func _enum_constants(info: Dictionary, obj: Object) -> Dictionary:
+	var out: Dictionary = {}
+	var ref: String = _enum_ref(info, obj)
+	if ref.is_empty():
+		return out
+	var cls: String = ref.get_slice(".", 0)
+	var enum_name: String = ref.get_slice(".", 1)
+	if not ClassDB.class_exists(cls):
+		return out
+	for c: String in ClassDB.class_get_enum_constants(cls, enum_name):
+		if c.ends_with("_MAX"):
+			continue
+		out[c] = ClassDB.class_get_integer_constant(cls, c)
+	return out
+
+
+## Longest common prefix of the names that ends in "_" ("SOURCE_", "OP_TYPE_"), or "".
+static func _common_prefix(names: Array) -> String:
+	if names.size() < 2:
+		return ""
+	var prefix: String = str(names[0])
+	for n: Variant in names:
+		var s: String = str(n)
+		while not prefix.is_empty() and not s.begins_with(prefix):
+			prefix = prefix.left(prefix.length() - 1)
+	var cut: int = prefix.rfind("_")
+	return prefix.left(cut + 1) if cut >= 0 else ""
+
+
+## "Label = value (CONSTANT)" for every value of the property's enum, for error messages.
+static func _enum_names(info: Dictionary, obj: Object = null) -> PackedStringArray:
+	var out: PackedStringArray = []
+	var consts: Dictionary = _enum_constants(info, obj)
+	var by_value: Dictionary = {}
+	for c: String in consts:
+		if not by_value.has(consts[c]):
+			by_value[consts[c]] = c
+	var entries: Array = _hint_entries(info)
+	for entry: Array in entries:
+		var text: String = "%s = %d" % [entry[0], entry[1]]
+		if by_value.has(entry[1]):
+			text += " (%s)" % by_value[entry[1]]
+		out.append(text)
+	if entries.is_empty():
+		for c: String in consts:
+			out.append("%s = %d" % [c, consts[c]])
+	return out
+
+
+## The name of an enum value for read-backs: the constant name when the enum is known
+## ("SOURCE_2D_TEXTURE"), else the inspector label, else "" (not an enum property).
+static func enum_value_name(obj: Object, prop: String, value: Variant) -> String:
+	if not (value is int):
+		return ""
+	var info: Dictionary = find_property(obj, prop)
+	if info.is_empty() or int(info.get("type", TYPE_NIL)) != TYPE_INT:
+		return ""
+	var consts: Dictionary = _enum_constants(info, obj)
+	for c: String in consts:
+		if consts[c] == value:
+			return c
+	for entry: Array in _hint_entries(info):
+		if entry[1] == value:
+			return entry[0]
+	return ""
 
 
 static func _norm_enum(s: String) -> String:

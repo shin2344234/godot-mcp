@@ -44,8 +44,10 @@ params: `{ "action"?: "list" | "add" | "remove" | "clear", "breakpoints"?: ["res
 - Lines that can never stop are added with a **warning** naming the next code line.
   Verified with 4.7.2: GDScript stops only where the compiler emitted a line opcode
   (statements). Blank lines, comments and `func` declaration lines never trigger; Godot
-  doesn't move them. A member `var x := 1` line does stop, while the object is constructed
-  (function `@implicit_new`).
+  doesn't move them. Neither do other declarations: `extends`, `class_name`, `signal`,
+  `const`, `enum`, annotations alone on a line and member `var`s without an initializer.
+  A member `var x := 1` line does stop, while the object is constructed (function
+  `@implicit_new`).
 - `remove` of a breakpoint that wasn't set is sent anyway and warned about; `clear` removes
   every breakpoint in the list.
 - Works while the game runs and while it is stopped.
@@ -61,7 +63,10 @@ params: `{ "action": "continue" | "pause" | "step_into" | "step_over" | "step_ou
   is, from a fresh stack dump:
   `{ "stopped": true, "reason": "step", "at": { "file", "line", "function", "code" }, "depth": 2, "locals": {...} }`
   (`code` is that source line, trimmed). Stepping past the end of a function stops at the
-  next GDScript line that runs anywhere (often the next frame's callback).
+  next GDScript line that runs anywhere (often the next frame's callback). A function the
+  engine called (a signal, physics or input callback, a deferred call) has no GDScript
+  caller, so `step_out` from it lands wherever GDScript runs next; when a `step_out` does not
+  stop in the caller frame, the result's `note` says so and names both places.
 - `continue` resumes. With `wait` > 0 (default 0) it waits for the next stop and returns it
   like a step; otherwise `{ "stopped": false, "running": true }`.
 - `pause` sends `core:break`. The game breaks at its next debugger poll, between frames
@@ -92,7 +97,22 @@ params: `{ "action": "continue" | "pause" | "step_into" | "step_over" | "step_ou
 
 ## godot_debug_state (read-only)
 
-params: `{ "frame"?: 0, "variables"?: true, "globals"?: false, "run_id"? }`
+params: `{ "frame"?: 0, "variables"?: true, "globals"?: false, "expand"?: ["self", "body"], "wait"?: seconds, "run_id"? }`
+
+- `wait`: when the game is running, wait up to that many seconds for it to stop. An action
+  that runs into a breakpoint (a `godot_game_input` click, a `godot_game_edit` call)
+  returns first and the stop arrives a moment later; without `wait` a debug_state right
+  after it can still say `stopped: false`.
+- `expand`: object variables of the selected frame (locals, members, `self`; up to 5) to
+  open one level: `{ "class", <script variables>, <common engine properties> }` under
+  `expanded`. Godot's debugger sends object variables as an id and class only, so this
+  runs two `evaluate`s in the stopped frame (the script's property list, then one
+  dictionary of `get()` values). The engine properties tried are `position`,
+  `global_position`, `rotation`, `scale`, `velocity`, `linear_velocity`,
+  `angular_velocity`, `visible`, `modulate`, `size`, `text`, `animation`, `frame`,
+  `current_animation` and `process_mode`; the ones the class lacks are left out. A name
+  that is not an object gets `{ "error" }`. Without `expand`, a stop that has object
+  variables carries a `note` saying how to open them.
 
 Running: `{ "run_id", "stopped": false, "running": true, "breakpoints": [...], "errors": 3 }`
 (`errors` = script errors so far; read them with `godot_run_output {errors: true}`).
@@ -141,6 +161,34 @@ the indented `at:` / backtrace lines under it), so they match `error_count` /
 `warning_count` here for errors that went through the debugger. Identical entries in a page are merged with a `count`, so an error raised every
 frame takes one entry. `detail` carries Godot's extra description when there is one;
 `source` (the C++ location) is given only when no script was on the stack.
+
+Start-up noise from the machine's drivers is not counted: an error or warning raised
+before the runtime's hello, with no script on the stack, from `drivers/*`, `platform/*` or
+`servers/audio/audio_server.cpp` (e.g. "Required Vulkan instance extension VK_KHR_surface
+not found", ALSA failures, "All audio drivers failed, falling back to the dummy driver" on
+a server or under Xvfb) is tagged `ENV` in the lines view, left out of `errors: true`, and
+counted separately as `environment`. Without this every windowed run on such a machine
+reported `errors: 3, warnings: 3`, so "no errors" could never be checked at a glance.
+
+## godot_run_output for games started from the editor
+
+A game started with `godot_run_start {mode: "editor"}` (or from the editor's Play button)
+sends its output to the editor's Output panel over the editor's debugger connection, and
+the editor gives plugins no way to read it (its `output` and `error` messages are handled
+before `EditorDebuggerPlugin` captures, `ScriptEditorDebugger::_parse_message`). So the
+game's runtime keeps its own copy: `runtime/ops/rt_output.gd` installs a `Logger`
+(`OS.add_logger`, Godot 4.5+) that keeps the newest 2000 entries, and `godot_run_output`
+reads it with the runtime method `rt.output` when `run_id` is `"editor"`, or by default
+when no process run of this server is running. Both views have the same shape as for
+process runs (`run_id: "editor"`, no `exit_code`):
+
+- lines: `"<seq> text"`, `"<seq> ERROR text (at res://x.gd:3 in f())"`,
+  `"<seq> WARNING ..."`; `printerr()` lines are tagged `[stderr]` but not counted as errors.
+- errors (`errors: true`): `{seq, message, at, callers}` (or `source` when no script was on
+  the stack), merged with `count` like above.
+
+Output printed before the runtime autoload entered the tree (by autoloads that load
+earlier) is not captured.
 
 ## Wire protocol (verified against Godot 4.7.2)
 

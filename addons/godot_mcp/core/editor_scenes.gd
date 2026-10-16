@@ -87,3 +87,32 @@ static func current_is_unsaved(ei: Object) -> bool:
 			return cached[idx] in unsaved
 	# Lists don't line up: fall back to the root's own path.
 	return current.scene_file_path in unsaved
+
+
+
+## Works around a Godot 4.7 editor bug that silently drops a scene's "unsaved" state.
+##
+## When a tab becomes current, EditorNode::_set_current_scene_nocheck() calls
+## EditorData::check_and_update_scene(): if a scene instanced in that tab changed on disk
+## (e.g. we just saved player.tscn, which main.tscn instances), the tab is re-packed and
+## re-instantiated from memory with a NEW root node, keeping the user's edits, and then
+## EditorUndoRedoManager::clear_history(id, false) runs, which marks the history as saved.
+## So the tab loses its asterisk, the "save changes?" prompt on close, and its entry in
+## get_unsaved_scenes(), while its edits are still not on disk (read in the 4.7.2 source,
+## editor/editor_node.cpp and editor/editor_data.cpp, and reproduced: edit main.tscn, edit
+## and save player.tscn, switch to main -> main reported clean). The dogfood test saw
+## godot_status report unsaved_scenes: [] with a dirty level open.
+##
+## Call this after any switch of the current tab that we cause (opening a scene, closing
+## one), passing unsaved_scenes() from before the switch. The root is replaced by the
+## reload, so tabs are matched by path, not by node. If the tab that is current now was
+## unsaved before and is not any more, it is marked unsaved again (mark_scene_as_unsaved()
+## acts on the current tab, which is the only one the reload touches).
+static func restore_unsaved(ei: Object, dirty_before: PackedStringArray) -> void:
+	if dirty_before.is_empty() or not ei.has_method(&"mark_scene_as_unsaved"):
+		return
+	var current: Node = ei.call(&"get_edited_scene_root")
+	if current == null or current.scene_file_path.is_empty():
+		return
+	if current.scene_file_path in dirty_before and not current_is_unsaved(ei):
+		ei.call(&"mark_scene_as_unsaved")

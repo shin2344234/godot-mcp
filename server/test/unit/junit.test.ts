@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { cleanMessage, gdunitLocation, gutScriptPath, parseJUnit, parseXml } from '../../src/testing/junit.js';
+import { cleanMessage, gdunitLocation, gutScriptPath, labelGutAssert, parseJUnit, parseXml } from '../../src/testing/junit.js';
 
 // GUT 9.7.1, real run: passes, a failure, a pending test, an inner test class.
 const GUT_REAL = `<?xml version="1.0" encoding="UTF-8"?>
@@ -140,7 +140,7 @@ describe('parseJUnit: GUT', () => {
     expect(r.totals).toEqual({ tests: 6, passed: 3, failed: 2, errors: 0, skipped: 1, duration_s: 0.001 });
     const fails = r.cases.filter((c) => c.status === 'failed');
     expect(fails).toEqual([
-      { suite: 'test/unit/test_math.gd', name: 'test_fails', status: 'failed', time: 0.000221, file: 'res://test/unit/test_math.gd', line: 7, message: '[1] expected to equal [2]:  one is not two' },
+      { suite: 'test/unit/test_math.gd', name: 'test_fails', status: 'failed', time: 0.000221, file: 'res://test/unit/test_math.gd', line: 7, message: 'got [1], expected to equal [2]: one is not two' },
       { suite: 'test/unit/test_math.gd.TestInner', name: 'test_inner_bad', status: 'failed', time: 0.000178, file: 'res://test/unit/test_math.gd', line: 17, message: 'inner broken' },
     ]);
     const pending = r.cases.find((c) => c.status === 'skipped')!;
@@ -204,5 +204,14 @@ describe('helpers', () => {
   it('cleans and caps messages', () => {
     expect(cleanMessage('\n  a\n\n   b\n   at line 3\n')).toBe('a\nb');
     expect(cleanMessage('x'.repeat(1000)).length).toBe(600);
+  });
+});
+
+describe('labelGutAssert', () => {
+  it('labels the got value and drops the bare colon of an assert without text', () => {
+    expect(labelGutAssert('[1] expected to equal [5]:')).toBe('got [1], expected to equal [5]');
+    expect(labelGutAssert('[1] expected to be between [2] and [3]:  why')).toBe('got [1], expected to be between [2] and [3]: why');
+    expect(labelGutAssert('[0.5] expected to equal [1] +/- [0.1]:  x')).toBe('got [0.5], expected to equal [1] +/- [0.1]: x');
+    expect(labelGutAssert('Unexpected Errors:\n[1] boom')).toBe('Unexpected Errors:\n[1] boom');
   });
 });

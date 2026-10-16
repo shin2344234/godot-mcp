@@ -51,11 +51,11 @@ export const gameScreenshot = defineOp({
   input: z.object({
     run_id: runId,
     source: z.enum(['game', 'editor_2d', 'editor_3d']).default('game'),
-    node: z.string().optional().describe('Viewport, SubViewportContainer, or a node inside a viewport.'),
+    node: z.string().optional().describe('Node to frame (crop to its screen rect), or a viewport.'),
     region: z
       .object({ x: z.number().int(), y: z.number().int(), w: z.number().int().min(1), h: z.number().int().min(1) })
       .optional()
-      .describe('Crop, in viewport pixels.'),
+      .describe('Crop, in image px (window px with stretch).'),
     max_size: z.number().int().min(16).max(4096).default(768).describe('Longest side, px.'),
     format: z.enum(['png', 'jpg']).default('png'),
     quality: z.number().min(0.01).max(1).optional().describe('JPEG; default 0.85.'),
@@ -76,6 +76,9 @@ export const gameScreenshot = defineOp({
     const editorParams = { ...params, view: source === 'editor_2d' ? '2d' : '3d' };
     let { result } = await callGodot<Record<string, unknown>>(ctx, 'editor.screenshot', editorParams, { editorOnly: true });
     let switched: unknown;
+    // The screen the user had open before the addon switched; sent back as _restore so the
+    // addon switches back to it right after capturing.
+    let restore: unknown;
     // After a main-screen switch the 3D/2D viewport only becomes visible once the editor has
     // processed a few frames; under a slow software renderer (Xvfb + llvmpipe) a single
     // 300 ms wait was not always enough, and the call failed with CONFLICT although an
@@ -84,9 +87,10 @@ export const gameScreenshot = defineOp({
     // _retried (which makes the addon give up with its CONFLICT error instead of retrying).
     for (let attempt = 1; typeof result.retry_after_ms === 'number' && attempt <= EDITOR_SCREEN_SWITCH_ATTEMPTS; attempt++) {
       switched ??= result.switched_main_screen;
+      restore ??= result.previous_main_screen;
       await new Promise((r) => setTimeout(r, Number(result.retry_after_ms)));
       const last = attempt === EDITOR_SCREEN_SWITCH_ATTEMPTS;
-      ({ result } = await callGodot<Record<string, unknown>>(ctx, 'editor.screenshot', { ...editorParams, ...(last ? { _retried: true } : {}) }, { editorOnly: true }));
+      ({ result } = await callGodot<Record<string, unknown>>(ctx, 'editor.screenshot', { ...editorParams, ...(restore ? { _restore: restore } : {}), ...(last ? { _retried: true } : {}) }, { editorOnly: true }));
     }
     return imageResult(result, { source, ...(switched ? { switched_main_screen: switched } : {}) });
   },

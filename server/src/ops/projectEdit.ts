@@ -38,7 +38,7 @@ export const projectSet = defineOp({
  */
 const inputEvent = z
   .union([z.string(), z.record(z.string(), z.unknown())])
-  .describe('Key name ("R", "Ctrl+S"; a physical key, i.e. layout position) or {type: key|mouse_button|joy_button|joy_axis, key, button ("left", "a"), axis ("left_x"), value (-1/1), physical (false: by keycode), ctrl, shift, alt, meta, device}.');
+  .describe('Key name ("R", "Up", "Ctrl+S"; always a physical key, i.e. layout position) or {type: key|mouse_button|joy_button|joy_axis, key, button ("left", "a"), axis ("left_x"), value (-1/1), physical (false: by keycode), ctrl, shift, alt, meta, device}.');
 
 export const inputEdit = defineOp({
   name: 'input.edit',
@@ -103,6 +103,7 @@ export const projectValidate = defineOp({
     scope: z.enum(['all', 'project', 'scenes', 'resources', 'scripts', 'uids']).optional(),
     path_prefix: z.string().optional().describe('Only check files under this folder, e.g. "res://levels".'),
     deep: z.boolean().optional().describe('Also load each scene/resource to catch load errors (slower).'),
+    addons: z.boolean().optional().describe('Also check res://addons/ (skipped by default).'),
     limit: z.number().int().min(1).max(1000).optional().describe('Max issues returned (default 200).'),
     offset: z.number().int().min(0).optional(),
   }),

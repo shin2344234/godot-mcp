@@ -3,7 +3,7 @@
  * class cache doesn't know yet (so headless runs refresh it first).
  */
 
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -95,6 +95,18 @@ describe('ClassCacheWatcher', () => {
     expect(stale.find((s) => s.name === 'FloorTileLibrary')?.path).toBe('res://scripts/floor.gd');
     // Same mismatch again (e.g. Godot rejected it): not reported a second time.
     expect(await w.needsRefresh()).toEqual([]);
+  });
+
+  it('reports a class whose script was moved or deleted, although the file is old', async () => {
+    // files.move keeps the mtime, so the moved script looks older than the cache; the
+    // cache entry at the old path is what gives it away (MCP_TEST_LOG Phase A, files_move).
+    setup();
+    mkdirSync(path.join(dir, 'scripts'));
+    renameSync(path.join(dir, 'enemy.gd'), path.join(dir, 'scripts', 'enemy.gd'));
+    const stale = await new ClassCacheWatcher(dir).staleClasses();
+    expect(stale).toEqual([{ name: 'Enemy', path: 'res://enemy.gd', base: 'Area2D', gone: true }]);
+    rmSync(path.join(dir, 'sub_lib.gd'));
+    expect((await new ClassCacheWatcher(dir).staleClasses()).map((s) => s.name).sort()).toEqual(['Enemy', 'SubLib']);
   });
 
   it('ignores a script edited after the cache when its class entry is unchanged', async () => {

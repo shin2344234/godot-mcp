@@ -41,10 +41,23 @@ const MODULES: Array = [
 	preload("ops/rt_live.gd"),
 	preload("ops/rt_input.gd"),
 	preload("ops/rt_view.gd"),
+	preload("ops/rt_output.gd"),
 ]
+
+## Captures the game's output for runs started from the editor (rt.output; see the file).
+const Output := preload("ops/rt_output.gd")
 
 var _methods: Dictionary = {}
 var _registered: bool = false
+
+## Methods whose replies say when the current scene was replaced since the previous one of
+## them (`scene_changed`, see _scene_hint). These are the calls an agent chains on the
+## current scene ("read the player, then set it, then click"). Server-internal calls
+## (time.state, time.step_wait, rt.output polling for godot_run_output) are left out so
+## they can't swallow the hint before the agent sees it.
+const SCENE_TRACKED: Array[String] = ["game.tree", "game.get", "game.edit", "game.eval", "input.run", "time.wait_for", "game.screenshot"]
+## Instance id of the current scene at the end of the last SCENE_TRACKED request (0 = none yet).
+var _seen_scene_id: int = 0
 
 
 func _enter_tree() -> void:
@@ -58,6 +71,7 @@ func _enter_tree() -> void:
 		_methods.merge((m as GDScript).call("methods"), true)
 	EngineDebugger.register_message_capture("mcp", _on_message)
 	_registered = true
+	Output.install()
 
 
 func _ready() -> void:
@@ -70,6 +84,8 @@ func _ready() -> void:
 func _exit_tree() -> void:
 	if _registered and EngineDebugger.has_capture("mcp"):
 		EngineDebugger.unregister_message_capture("mcp")
+	if _registered:
+		Output.uninstall()
 	_registered = false
 
 
@@ -131,8 +147,97 @@ func _handle(req: Dictionary) -> void:
 			reply = out
 		else:
 			reply = R.err(R.INTERNAL, "%s returned an unexpected value (runtime bug)." % method)
+		if method in SCENE_TRACKED:
+			_scene_hint(reply)
 	reply["id"] = id
 	_send("mcp:reply", reply)
+
+
+## Adds `scene_changed: "<scene file>"` to a reply when the current scene is a different
+## instance than at the end of the previous tracked request. A game that reloads its level
+## by itself (game over, "Play again") otherwise gave no sign of it: a game.edit set or call
+## then silently changed the NEW scene's nodes, and an agent teleported a player into a fresh
+## level without noticing. Instance ids change on every reload, also when the file is the
+## same. Checked when the request ENDS, so a change made by this very request (a click on a
+## "Restart" button, game.edit change_scene) is reported too. On an error the hint goes
+## into the message, where it explains a NOT_FOUND for a node of the old scene.
+func _scene_hint(reply: Dictionary) -> void:
+	var scene: Node = get_tree().current_scene
+	# No current scene: a scene change is in progress (change_scene_to_* frees the old scene
+	# first and adds the new one at the end of the frame). Keep the old id, so the next call,
+	# which sees the new scene, reports it.
+	if scene == null:
+		return
+	var now: int = scene.get_instance_id()
+	var before: int = _seen_scene_id
+	_seen_scene_id = now
+	if before == 0 or now == before:
+		return
+	var label: String = scene.scene_file_path if not scene.scene_file_path.is_empty() else String(scene.name)
+	if reply.get("result") is Dictionary:
+		(reply["result"] as Dictionary)["scene_changed"] = label
+	elif reply.get("error") is Dictionary:
+		var e: Dictionary = reply["error"]
+		e["message"] = str(e.get("message", "")) + " Note: the current scene was replaced since your previous game call (now '%s')." % label
+
+
+## Names and values of the globals an Expression should see, for Expression.parse/execute.
+## Godot's Expression only resolves its inputs, `self`'s members and built-ins (PI,
+## Vector2(), abs()...): `GameState.lives` failed with "Invalid named index 'GameState'",
+## although GDScript (and godot_debug_control evaluate, which runs in a GDScript frame)
+## sees autoloads and engine singletons by name. So every autoload (ProjectSettings
+## "autoload/<Name>", looked up as /root/<Name>) and engine singleton (Input, Engine, OS,
+## Time...: Engine.get_singleton_list()) whose name appears in `code` as a word is passed as
+## an input. Only names that occur are passed, so a node property that happens to share a
+## name with an unused singleton is never shadowed. `explicit` (the caller's own inputs)
+## wins over both. Returns [PackedStringArray names, Array values].
+func expression_globals(code: String, explicit: Dictionary) -> Array:
+	var names := PackedStringArray()
+	var values: Array = []
+	for k: Variant in explicit:
+		names.append(str(k))
+		values.append(explicit[k])
+	var candidates: Dictionary = {}
+	for p: Dictionary in ProjectSettings.get_property_list():
+		var key: String = p["name"]
+		if key.begins_with("autoload/"):
+			var autoload: String = key.trim_prefix("autoload/")
+			if autoload != AUTOLOAD_NAME:
+				candidates[autoload] = true
+	for s: StringName in Engine.get_singleton_list():
+		candidates[String(s)] = false
+	for cand: String in candidates:
+		if names.has(cand) or not _mentions(code, cand):
+			continue
+		var value: Object = null
+		if candidates[cand]:
+			value = get_tree().root.get_node_or_null(NodePath(cand))
+		elif Engine.has_singleton(cand):
+			value = Engine.get_singleton(cand)
+		if value != null:
+			names.append(cand)
+			values.append(value)
+	return [names, values]
+
+
+## True when `word` occurs in `code` as an identifier (not inside a longer name).
+static func _mentions(code: String, word: String) -> bool:
+	var from: int = 0
+	while from < code.length():
+		var at: int = code.find(word, from)
+		if at < 0:
+			return false
+		var before_ok: bool = at == 0 or not _ident_char(code.unicode_at(at - 1))
+		var end: int = at + word.length()
+		var after_ok: bool = end >= code.length() or not _ident_char(code.unicode_at(end))
+		if before_ok and after_ok:
+			return true
+		from = at + 1
+	return false
+
+
+static func _ident_char(c: int) -> bool:
+	return c == 95 or (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
 
 
 func _sorted_method_names() -> Array:

@@ -213,6 +213,25 @@ export function cleanMessage(text: string, max = MAX_MESSAGE): string {
   return out;
 }
 
+/**
+ * Label GUT's assertion texts. GUT writes every comparison as
+ * "[<got>] expected to equal [<expected>]:  <text>" (addons/gut/test.gd, 9.7.1:
+ * assert_eq, assert_ne, assert_gt, assert_between, assert_same...), which leaves the
+ * first value unlabeled and ends in a bare ":" when the assert had no text. The
+ * dogfood test read "[1] expected to equal [5]:" as cut off. This turns it into
+ * "got [1], expected to equal [5]" (plus ": <text>" when there is one).
+ */
+export function labelGutAssert(message: string): string {
+  return message
+    .split('\n')
+    .map((l) => {
+      const m = /^(\[.*?\]) (expected to .*?\])(?::\s*(.*))?$/.exec(l);
+      if (!m) return l;
+      return `got ${m[1]}, ${m[2]}${m[3] ? `: ${m[3]}` : ''}`;
+    })
+    .join('\n');
+}
+
 const num = (v: string | undefined): number => {
   const x = Number(v);
   return Number.isFinite(x) ? x : 0;
@@ -275,7 +294,8 @@ export function parseJUnit(xml: string, framework: Framework): JUnitSummary {
       if (detail) {
         // GUT puts the text in the body and a fixed word ("failed"/"pending") in
         // `message`; GdUnit4 puts the location in `message` and the text in the body.
-        const body = cleanMessage(detail.text);
+        let body = cleanMessage(detail.text);
+        if (framework === 'gut') body = labelGutAssert(body);
         if (body) entry.message = body;
         else if (framework === 'gut' && detail.attrs.message && !/^(failed|pending)$/.test(detail.attrs.message)) entry.message = detail.attrs.message;
       }

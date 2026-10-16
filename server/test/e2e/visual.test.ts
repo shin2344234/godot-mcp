@@ -118,6 +118,33 @@ describe.skipIf(!enabled)('visual (headless)', () => {
     expect(missing).toMatch(/create: true/);
   }, 120_000);
 
+  it('wires one component of a vector output and takes enum values by name', async () => {
+    // MCP_TEST_LOG: Texture alpha could not be wired (the node has one vec4 output; the graph
+    // editor's expand arrow exposes r/g/b/a), and enum properties took only numbers.
+    const r = json(
+      await call('godot_visual_shader_graph', {
+        path: 'res://shaders/alpha.tres',
+        create: true,
+        mode: 'canvas_item',
+        ops: [
+          { op: 'add_node', type: 'Texture', id: 2, properties: { source: 'SOURCE_2D_TEXTURE' } },
+          { op: 'connect', from: 2, from_port: 'color.a', to: 0, to_port: 'alpha' },
+          { op: 'add_node', type: 'Mix', id: 3, properties: { op_type: 'Vector3Scalar' } },
+        ],
+      }),
+    );
+    expect(r.results[0]).toMatchObject({ properties: { source: 2 }, enum_names: { source: 'SOURCE_2D_TEXTURE' } });
+    expect(r.results[1]).toMatchObject({ from_port: 4, from_port_spec: 'color.a', to_port: 1 });
+    expect(r.results[2].enum_names).toEqual({ op_type: 'OP_TYPE_VECTOR_3D_SCALAR' });
+    const g = json(await call('godot_visual_shader_graph_read', { path: 'res://shaders/alpha.tres' }));
+    expect(g.types.fragment.nodes.find((n: { id: number }) => n.id === 2).expanded_ports).toEqual([0]);
+    expect(json(await call('godot_visual_shader_check', { path: 'res://shaders/alpha.tres' })).valid).toBe(true);
+    const bad = errorText(
+      await call('godot_visual_shader_graph', { path: 'res://shaders/alpha.tres', ops: [{ op: 'set', id: 3, properties: { op_type: 'Vector9' } }] }),
+    );
+    expect(bad).toMatch(/Vector3Scalar = 4 \(OP_TYPE_VECTOR_3D_SCALAR\)/);
+  }, 120_000);
+
   it('checks shader code and reports compiler errors with lines', async () => {
     const bad = json(await call('godot_visual_shader_check', { code: BAD_SHADER }));
     expect(bad.valid).toBe(false);
@@ -134,6 +161,9 @@ describe.skipIf(!enabled)('visual (headless)', () => {
     json(await call('godot_node_add', { scene: 'res://ui/hud.tscn', parent: '.', type: 'Panel', name: 'Box', properties: { size: [100, 50] } }));
     const r = json(await call('godot_visual_layout', { scene: 'res://ui/hud.tscn', path: 'Box', preset: 'center', resize_mode: 'keep_size' }));
     expect(r).toMatchObject({ layout_mode: 'anchors', anchors: [0.5, 0.5, 0.5, 0.5], offsets: [-50, -25, 50, 25], grow: [2, 2], saved: true });
+    // The resulting size is reported (headless only on axes the anchors don't stretch).
+    expect(r.size).toEqual([100, 50]);
+    expect(r.previous_size).toBeUndefined();
     const full = json(
       await call('godot_visual_layout', { scene: 'res://ui/hud.tscn', path: 'Box', preset: 'Full Rect', margin: 8, size_flags: { horizontal: 'expand_fill' }, custom_minimum_size: [10, 20] }),
     );
@@ -148,9 +178,18 @@ describe.skipIf(!enabled)('visual (headless)', () => {
     json(await call('godot_node_add', { scene: 'res://ui/hud.tscn', parent: '.', type: 'Panel', name: 'Corner' }));
     const corner = json(await call('godot_visual_layout', { scene: 'res://ui/hud.tscn', path: 'Corner', preset: 'top_right', margin: 16, custom_minimum_size: [200, 30] }));
     expect(corner.offsets).toEqual([-216, 16, -16, 46]);
+    expect(corner).toMatchObject({ size: [200, 30], previous_size: [0, 0] });
     const mid = json(await call('godot_visual_layout', { scene: 'res://ui/hud.tscn', path: 'Corner', preset: 'center', custom_minimum_size: [120, 40] }));
     expect(mid.offsets).toEqual([-60, -20, 60, 20]);
   }, 120_000);
+
+  it('names the layout of a Control without a parent Control (under a CanvasLayer)', async () => {
+    // Godot calls this LAYOUT_MODE_UNCONTROLLED; anchors still apply, relative to the viewport.
+    json(await call('godot_scene_create', { path: 'res://ui/layer.tscn', root_type: 'CanvasLayer' }));
+    json(await call('godot_node_add', { scene: 'res://ui/layer.tscn', parent: '.', type: 'MarginContainer', name: 'Margin' }));
+    const r = json(await call('godot_visual_layout', { scene: 'res://ui/layer.tscn', path: 'Margin', preset: 'top_wide', margin: 10 }));
+    expect(r.layout_mode).toBe('anchors (to the viewport: no parent Control)');
+  }, 60_000);
 
   it('rejects layout on non-Controls and unknown presets', async () => {
     const n2d = errorText(await call('godot_visual_layout', { scene: 'res://main.tscn', path: '.', preset: 'center' }));

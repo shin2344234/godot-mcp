@@ -48,7 +48,7 @@ export const sceneTree = defineOp({
     'Godot scene: show the node tree (names, types, scripts, instanced sub-scenes) of a scene. Use depth/max_nodes to keep large scenes small; start from a subtree with root.',
   input: z.object({
     scene,
-    root: z.string().optional().describe('Start from this node path instead of the scene root.'),
+    root: z.string().optional().describe('Start from this node path instead of the scene root. An instanced sub-scene lists its own (hidden_children) nodes.'),
     depth: z.number().int().min(0).max(50).default(4),
     max_nodes: z.number().int().min(1).max(2000).default(300),
   }),

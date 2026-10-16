@@ -190,7 +190,12 @@ static func _read_tiles(root: Node, layer: TileMapLayer, region: Dictionary, lim
 		"used_rect": {"x": rect.position.x, "y": rect.position.y, "w": rect.size.x, "h": rect.size.y},
 	}
 	if layer.tile_set != null:
-		result.merge(WorldTileset.describe(layer.tile_set))
+		# summary_only is a real summary: per-source tile counts without the coordinate
+		# lists (it used to omit only the cells and still listed every tile).
+		var list_ids: Variant = null
+		if summary_only:
+			list_ids = []
+		result.merge(WorldTileset.describe(layer.tile_set, list_ids))
 	else:
 		result["note"] = "No tile_set assigned: set one with node.set {\"tile_set\": \"res://....tres\"} (create it with tileset.edit create=true)."
 	if summary_only:
@@ -401,7 +406,7 @@ static func _apply_grid_op(node: Node, scratch: Node, raw: Variant, i: int, stat
 		"set", "erase", "terrain":
 			if op == "terrain" and not is_tiles:
 				return _bad_op(i, op, "terrains exist only for TileMapLayer; use set/fill_rect with an item for GridMap.")
-			var cl: Dictionary = _cells(d, dims, i, op, state)
+			var cl: Dictionary = _cells_or_rect(d, dims, i, op, state)
 			if R.is_err(cl):
 				return cl
 			var cells: Array = cl["value"]
@@ -421,30 +426,59 @@ static func _apply_grid_op(node: Node, scratch: Node, raw: Variant, i: int, stat
 			_paint(scratch, cells, spec["value"], touched, is_tiles)
 			return {}
 		"fill_rect":
-			var rr: Dictionary = _region(d.get("rect", {}) if d.get("rect") is Dictionary else {}, dims, "grid.edit: ops[%d] (fill_rect) rect" % i)
-			if R.is_err(rr):
-				return rr
-			var lo: Vector3i = rr["value"][0]
-			var hi: Vector3i = rr["value"][1]
-			var size: Vector3i = hi - lo
-			var count: int = size.x * size.y * size.z
-			state["budget"] = int(state["budget"]) + count
-			if int(state["budget"]) > MAX_CELLS:
-				return _bad_op(i, op, "this call would touch more than %d cells; split it into several grid.edit calls." % MAX_CELLS)
+			var rc: Dictionary = _rect_cells(d.get("rect", {}) if d.get("rect") is Dictionary else {}, dims, i, op, state)
+			if R.is_err(rc):
+				return rc
 			var spec2: Dictionary = _paint_spec(node, d, i, op)
 			if R.is_err(spec2):
 				return spec2
-			var cells2: Array = []
-			for z: int in range(lo.z, hi.z):
-				for y: int in range(lo.y, hi.y):
-					for x: int in range(lo.x, hi.x):
-						if is_tiles:
-							cells2.append(Vector2i(x, y))
-						else:
-							cells2.append(Vector3i(x, y, z))
-			_paint(scratch, cells2, spec2["value"], touched, is_tiles)
+			_paint(scratch, rc["value"], spec2["value"], touched, is_tiles)
 			return {}
 	return {}
+
+
+## The cells of rect {x, y, w, h} (GridMap: + z, d), counted against the per-call budget.
+static func _rect_cells(rect: Dictionary, dims: int, i: int, op: String, state: Dictionary) -> Dictionary:
+	var rr: Dictionary = _region(rect, dims, "grid.edit: ops[%d] (%s) rect" % [i, op])
+	if R.is_err(rr):
+		return rr
+	var lo: Vector3i = rr["value"][0]
+	var hi: Vector3i = rr["value"][1]
+	var size: Vector3i = hi - lo
+	state["budget"] = int(state["budget"]) + size.x * size.y * size.z
+	if int(state["budget"]) > MAX_CELLS:
+		return _bad_op(i, op, "this call would touch more than %d cells; split it into several grid.edit calls." % MAX_CELLS)
+	var cells: Array = []
+	for z: int in range(lo.z, hi.z):
+		for y: int in range(lo.y, hi.y):
+			for x: int in range(lo.x, hi.x):
+				if dims == 2:
+					cells.append(Vector2i(x, y))
+				else:
+					cells.append(Vector3i(x, y, z))
+	return R.value(cells)
+
+
+## set / erase / terrain cells: d.cells and/or d.rect (both may be given; the rect's cells
+## come after the listed ones). The rect form exists mainly for terrain painting: the
+## dogfood test typed ~250 cells by hand to paint a 60x22 level because terrain only
+## took `cells`.
+static func _cells_or_rect(d: Dictionary, dims: int, i: int, op: String, state: Dictionary) -> Dictionary:
+	var has_rect: bool = d.get("rect") != null
+	if has_rect and not d["rect"] is Dictionary:
+		return _bad_op(i, op, "'rect' must be an object like %s." % ("{\"x\": 0, \"y\": 0, \"w\": 16, \"h\": 4}" if dims == 2 else "{\"x\": 0, \"y\": 0, \"z\": 0, \"w\": 8, \"h\": 1, \"d\": 8}"))
+	var out: Array = []
+	if d.get("cells") != null or not has_rect:
+		var cl: Dictionary = _cells(d, dims, i, op, state)
+		if R.is_err(cl):
+			return cl
+		out = cl["value"]
+	if has_rect:
+		var rc: Dictionary = _rect_cells(d["rect"], dims, i, op, state)
+		if R.is_err(rc):
+			return rc
+		out.append_array(rc["value"])
+	return R.value(out)
 
 
 ## Parses d.cells, counting them against the per-call budget.
@@ -452,7 +486,8 @@ static func _cells(d: Dictionary, dims: int, i: int, op: String, state: Dictiona
 	var raw: Variant = d.get("cells")
 	var example: String = "[[0, 0], [1, 0]]" if dims == 2 else "[[0, 0, 0], [1, 0, 0]]"
 	if not raw is Array or (raw as Array).is_empty():
-		return _bad_op(i, op, "'cells' must be a non-empty list of %s coordinates, e.g. %s." % ["[x, y]" if dims == 2 else "[x, y, z]", example])
+		return _bad_op(i, op, "'cells' must be a non-empty list of %s coordinates, e.g. %s%s." % ["[x, y]" if dims == 2 else "[x, y, z]", example,
+			"" if op == "fill_rect" else " (or pass 'rect' {x, y, w, h})"])
 	state["budget"] = int(state["budget"]) + (raw as Array).size()
 	if int(state["budget"]) > MAX_CELLS:
 		return _bad_op(i, op, "this call would touch more than %d cells; split it into several grid.edit calls." % MAX_CELLS)
@@ -460,7 +495,9 @@ static func _cells(d: Dictionary, dims: int, i: int, op: String, state: Dictiona
 	for v: Variant in raw:
 		var c: Variant = _cell(v, dims)
 		if c == null:
-			return _bad_op(i, op, "cell %s is not an integer %s coordinate (e.g. %s)." % [JSON.stringify(v), "[x, y]" if dims == 2 else "[x, y, z]", example])
+			# WorldTileset.js prints integral floats as ints: JSON numbers arrive as floats,
+			# and "[0.0,18.0,5.0]" read as if the caller had sent floats.
+			return _bad_op(i, op, "cell %s is not an integer %s coordinate (e.g. %s)." % [WorldTileset.js(v), "[x, y]" if dims == 2 else "[x, y, z]", example])
 		out.append(c)
 	return R.value(out)
 
@@ -523,13 +560,28 @@ static func _terrain(layer: TileMapLayer, scratch: TileMapLayer, d: Dictionary, 
 		return _bad_op(i, "terrain", "the TileSet has no terrain sets. Add one with tileset.edit (add_terrain_set, add_terrain, set_terrain) first.")
 	var tset: Variant = _int(d.get("terrain_set", 0))
 	if tset == null or int(tset) < 0 or int(tset) >= ts.get_terrain_sets_count():
-		return _bad_op(i, "terrain", "'terrain_set' must be 0-%d." % (ts.get_terrain_sets_count() - 1))
-	var terrain: Variant = _int(d.get("terrain"))
+		return _bad_op(i, "terrain", "'terrain_set' must be 0-%d, got %s." % [ts.get_terrain_sets_count() - 1, WorldTileset.js(d.get("terrain_set"))])
+	var terrain: Variant = null
+	var raw_terrain: Variant = d.get("terrain")
+	if raw_terrain is String:
+		# Terrains by name ("rock"), as named with tileset.edit add_terrain. Without an explicit
+		# terrain_set, every set is searched so the common one-set case needs no index at all.
+		var sets: Array = [tset] if d.get("terrain_set") != null else range(ts.get_terrain_sets_count())
+		for s: int in sets:
+			for k: int in range(ts.get_terrains_count(s)):
+				if ts.get_terrain_name(s, k) == raw_terrain:
+					tset = s
+					terrain = k
+					break
+			if terrain != null:
+				break
+		if terrain == null:
+			return _bad_op(i, "terrain", "no terrain named '%s'%s. Terrains: %s." % [raw_terrain,
+				(" in terrain set %d" % tset) if d.get("terrain_set") != null else "", _terrain_names(ts)])
+	else:
+		terrain = _int(raw_terrain)
 	if terrain == null or int(terrain) < -1 or int(terrain) >= ts.get_terrains_count(tset):
-		var names: Array = []
-		for k: int in range(ts.get_terrains_count(tset)):
-			names.append("%d = %s" % [k, ts.get_terrain_name(tset, k)])
-		return _bad_op(i, "terrain", "'terrain' must be a terrain index of set %d (%s) or -1 to clear." % [tset, ", ".join(names)])
+		return _bad_op(i, "terrain", "'terrain' must be a terrain name, or an index of set %d, or -1 to clear; got %s. Terrains: %s." % [tset, WorldTileset.js(raw_terrain), _terrain_names(ts)])
 	var mode: String = str(d.get("mode", "connect"))
 	if not mode in ["connect", "path"]:
 		return _bad_op(i, "terrain", "'mode' must be \"connect\" (fill an area) or \"path\" (connect cells in the given order).")
@@ -548,6 +600,17 @@ static func _terrain(layer: TileMapLayer, scratch: TileMapLayer, d: Dictionary, 
 		(state["warnings"] as Array[String]).append("ops[%d] (terrain) changed nothing: no tile in the TileSet has terrain %s of set %s (set it with tileset.edit set_terrain)." % [i, terrain, tset])
 	state["snapshot"] = true
 	return {}
+
+
+## "set 0: 0 = rock, 1 = dirt; set 1: ..." for terrain errors.
+static func _terrain_names(ts: TileSet) -> String:
+	var parts: Array = []
+	for s: int in range(ts.get_terrain_sets_count()):
+		var names: Array = []
+		for k: int in range(ts.get_terrains_count(s)):
+			names.append("%d = %s" % [k, ts.get_terrain_name(s, k)])
+		parts.append("set %d: %s" % [s, ", ".join(names) if not names.is_empty() else "(none)"])
+	return "; ".join(parts)
 
 
 static func _sources_hint(ts: TileSet) -> String:
@@ -625,8 +688,17 @@ static func do_tileset_edit(params: Variant, env: Dictionary) -> Dictionary:
 		return R.godot_err("Saving TileSet '%s'" % path, err)
 	if bool(env.get("editor", false)) and env.get("filesystem") != null:
 		(env["filesystem"] as Object).call("update_file", path)
-	var result: Dictionary = {"path": path, "created": create, "ops": applied["value"], "saved": true}
-	result.merge(WorldTileset.describe(ts))
+	var done: Dictionary = applied["value"]
+	var result: Dictionary = {"path": path, "created": create, "ops": done["ops"], "saved": true}
+	# Tile coordinate lists only for the atlases this call created (what the caller paints
+	# with next); every other source reports counts. grid.read lists all tiles.
+	var new_sources: Array = []
+	for r: Dictionary in done["ops"]:
+		if r["op"] == "add_atlas":
+			new_sources.append(r["source"])
+	result.merge(WorldTileset.describe(ts, new_sources))
+	if not (done["warnings"] as Array).is_empty():
+		result["warnings"] = done["warnings"]
 	return R.ok(result)
 
 
@@ -657,8 +729,11 @@ static func plan_navigation_bake(root: Node, params: Variant) -> Dictionary:
 	var p := Params.new(params, "navigation.bake")
 	var path: String = p.opt_string("path", "")
 	var outline_raw: Array = p.opt_array("outline", [])
+	var agent_radius: Variant = p.raw("agent_radius")
 	if p.failed():
 		return p.error
+	if agent_radius != null and not ((agent_radius is float or agent_radius is int) and float(agent_radius) >= 0.0):
+		return R.err(R.BAD_PARAMS, "navigation.bake: 'agent_radius' must be a number >= 0 (px in 2D, meters in 3D), got %s." % WorldTileset.js(agent_radius))
 	var rr: Dictionary = _region_node(root, path, "navigation.bake")
 	if R.is_err(rr):
 		return rr
@@ -675,7 +750,7 @@ static func plan_navigation_bake(root: Node, params: Variant) -> Dictionary:
 			return R.err(R.BAD_PARAMS, "navigation.bake: 'outline' only applies to NavigationRegion2D; 3D regions bake from their child meshes/colliders.")
 		for v: Variant in outline_raw:
 			if not (v is Array and (v as Array).size() == 2 and (v[0] is float or v[0] is int) and (v[1] is float or v[1] is int)):
-				return R.err(R.BAD_PARAMS, "navigation.bake: outline point %s is not [x, y]." % JSON.stringify(v))
+				return R.err(R.BAD_PARAMS, "navigation.bake: outline point %s is not [x, y]." % WorldTileset.js(v))
 			outline.append(Vector2(float(v[0]), float(v[1])))
 		if outline.size() < 3:
 			return R.err(R.BAD_PARAMS, "navigation.bake: 'outline' needs at least 3 points.")
@@ -690,6 +765,14 @@ static func plan_navigation_bake(root: Node, params: Variant) -> Dictionary:
 	if is_2d and not outline.is_empty():
 		(work as NavigationPolygon).clear_outlines()
 		(work as NavigationPolygon).add_outline(outline)
+	# agent_radius is how far the baked area keeps away from obstacles and outline edges
+	# (NavigationPolygon default 10 px, NavigationMesh 0.5 m). It is a property of the
+	# resource, so it is written to the region's resource together with the baked data
+	# below, and later bakes (the editor's Bake button too) keep using it. The other bake
+	# settings (parsed_geometry_type, source_geometry_mode, collision mask) can be set
+	# beforehand with node.set {"navigation_polygon:parsed_geometry_type": 1} on the region.
+	if agent_radius != null:
+		work.set(&"agent_radius", float(agent_radius))
 	var baked: Dictionary = WorldNav.bake(region, root, work)
 	if R.is_err(baked):
 		return baked
@@ -707,6 +790,9 @@ static func plan_navigation_bake(root: Node, params: Variant) -> Dictionary:
 		cs.do_property(region, prop, work)
 		cs.undo_property(region, prop, null)
 	else:
+		if agent_radius != null:
+			cs.do_property(res, &"agent_radius", work.get("agent_radius"))
+			cs.undo_property(res, &"agent_radius", res.get("agent_radius"))
 		# Write the baked arrays into the region's own resource, so a NavigationPolygon/Mesh
 		# shared by several regions or saved as a .tres stays shared. Polygons are cleared
 		# first so vertices and polygon indices never disagree in between.
@@ -729,6 +815,8 @@ static func plan_navigation_bake(root: Node, params: Variant) -> Dictionary:
 			"parser": info["parser"],
 			"resource": res.resource_path if external else "(embedded in the scene)",
 		}
+		if agent_radius != null:
+			result["agent_radius"] = work.get("agent_radius")
 		if info.has("parsed"):
 			result["parsed_shapes"] = info["parsed"]
 		if not (info["warnings"] as Array).is_empty():
@@ -760,7 +848,7 @@ static func read_navigation_path(root: Node, params: Variant) -> Dictionary:
 	var nums: Array[float] = []
 	for v: Variant in from_raw + to_raw:
 		if not (v is float or v is int):
-			return R.err(R.BAD_PARAMS, "navigation.path: 'from'/'to' must contain numbers, got %s." % JSON.stringify(v))
+			return R.err(R.BAD_PARAMS, "navigation.path: 'from'/'to' must contain numbers, got %s." % WorldTileset.js(v))
 		nums.append(float(v))
 	var want_2d: bool = dims == 2
 	var candidates: Array[Node] = []

@@ -37,6 +37,8 @@ describe.skipIf(!enabled)('scene extras: headless', () => {
       await call('godot_node_instance', { scene: 'res://main.tscn', instance: 'res://player.tscn', parent: 'Enemies', name: 'P2', editable_children: true, properties: { position: [5, 6] } }),
     );
     expect(r).toMatchObject({ path: 'Enemies/P2', instance: 'res://player.tscn', editable_children: true, saved: true, backend: 'headless' });
+    // The applied overrides are echoed back, read from the node.
+    expect(r.properties).toEqual({ position: 'Vector2(5, 6)' });
     const tscn = read(proj.dir, 'main.tscn');
     // Linked instance (not copied nodes): no Sprite2D node under P2 is written.
     expect(tscn).toMatch(/\[node name="P2" parent="Enemies"[^\]]*instance=ExtResource\(/);
@@ -44,6 +46,19 @@ describe.skipIf(!enabled)('scene extras: headless', () => {
     expect(tscn).toContain('[editable path="Enemies/P2"]');
     expect(tscn).toContain('position = Vector2(5, 6)');
   }, 120_000);
+
+  it('scene.tree counts an instance\'s hidden nodes and lists them when started there', async () => {
+    // main.tscn instances player.tscn as "Player" without Editable Children.
+    const tree = json(await call('godot_scene_tree', { scene: 'res://main.tscn' }));
+    const player = tree.root.children.find((c: { name: string }) => c.name === 'Player');
+    expect(player).toMatchObject({ instance: 'res://player.tscn', child_count: 0, hidden_children: 2, children: [] });
+    const inner = json(await call('godot_scene_tree', { scene: 'res://main.tscn', root: 'Player' }));
+    expect(inner.root.child_count).toBe(2);
+    expect(inner.root.children.map((c: { path: string; inside_instance: string }) => [c.path, c.inside_instance])).toEqual([
+      ['Player/Sprite2D', 'Player'],
+      ['Player/CollisionShape2D', 'Player'],
+    ]);
+  }, 60_000);
 
   it('node.instance refuses cycles', async () => {
     const self = errorText(await call('godot_node_instance', { scene: 'res://main.tscn', instance: 'res://main.tscn' }));
@@ -65,6 +80,28 @@ describe.skipIf(!enabled)('scene extras: headless', () => {
     expect(tree.root.child_count).toBe(2);
     expect(errorText(await call('godot_scene_inherit', { path: 'res://chars/hero.tscn', base: 'res://player.tscn' }))).toMatch(/^CONFLICT/);
     expect(errorText(await call('godot_scene_inherit', { path: 'res://x.tscn', base: 'res://nope.tscn' }))).toMatch(/NOT_FOUND.*Existing scenes/);
+  }, 120_000);
+
+  it('refuses to remove, rename or move nodes inherited from the base scene', async () => {
+    // Godot cannot store the removal/rename of a base node in an inherited scene: it would
+    // come back on the next load, so these must fail instead of reporting success.
+    const scene = 'res://chars/hero.tscn';
+    for (const [tool, args] of [
+      ['godot_node_remove', { path: 'Sprite2D' }],
+      ['godot_node_rename', { path: 'Sprite2D', name: 'Body' }],
+      ['godot_node_reparent', { path: 'Sprite2D', new_parent: 'CollisionShape2D' }],
+      ['godot_node_move', { path: 'Sprite2D', index: -1 }],
+    ] as const) {
+      expect(errorText(await call(tool, { scene, ...args }))).toMatch(/BAD_PARAMS.*inherited from the base scene 'res:\/\/player\.tscn'/);
+    }
+    // Property overrides and nodes added in the inherited scene itself still work.
+    json(await call('godot_node_set', { scene, path: 'Sprite2D', properties: { visible: false } }));
+    json(await call('godot_node_add', { scene, type: 'Node2D', name: 'Hat' }));
+    json(await call('godot_node_rename', { scene, path: 'Hat', name: 'Cap' }));
+    json(await call('godot_node_remove', { scene, path: 'Cap' }));
+    const tscn = read(proj.dir, 'chars/hero.tscn');
+    expect(tscn).toContain('visible = false');
+    expect(tscn).not.toContain('Cap');
   }, 120_000);
 
   it('node.find filters by type, name, group and property', async () => {
@@ -125,6 +162,8 @@ describe.skipIf(!enabled)('scene extras: headless', () => {
     expect(r.count).toBe(5);
     expect(r.results.map((x: { method: string }) => x.method)).toEqual(['node.add', 'node.set', 'node.add', 'signal.connect', 'node.reparent']);
     expect(r.results[4].path).toBe('Enemies/Hit');
+    // signal.connect's own "method" (the handler) is kept as "handler", since "method" names the op.
+    expect(r.results[3].handler).toBe('_on_hit_body_entered');
     const tscn = read(proj.dir, 'main.tscn');
     expect(tscn).toContain('[node name="Hit" type="Area2D" parent="Enemies"');
     expect(tscn).toContain('[node name="CollisionShape2D" type="CollisionShape2D" parent="Enemies/Hit"');
@@ -247,8 +286,35 @@ describe.skipIf(!enabled)('scene extras: editor', () => {
     status = json(await call('godot_status', {}));
     expect(status.editor.open_scenes).not.toContain('res://chars/hero.tscn');
     expect(read(proj.dir, 'chars/hero.tscn')).not.toContain('Unsaved');
+    // The same guard applies in the editor (the dogfood test removed a base node there,
+    // got a success, and found the node back after save + reopen).
+    json(await call('godot_scene_open', { path: 'res://chars/hero.tscn' }));
+    expect(errorText(await call('godot_node_remove', { path: 'Sprite2D' }))).toMatch(/BAD_PARAMS.*inherited from the base scene/);
+    json(await call('godot_scene_close', { discard: true }));
 
     expect(errorText(await call('godot_scene_close', { path: 'res://player.tscn' }))).toMatch(/NOT_FOUND: .*not open/);
+  }, 120_000);
+
+  it('keeps a scene unsaved after saving a sub-scene it instances, and says when `scene` switched tabs', async () => {
+    json(await call('godot_scene_open', { path: 'res://main.tscn' }));
+    json(await call('godot_node_set', { path: 'Label', properties: { text: 'dirty' } }));
+    const other = json(await call('godot_node_set', { scene: 'res://player.tscn', path: 'Sprite2D', properties: { visible: false } }));
+    expect(other).toMatchObject({ scene: 'res://player.tscn', switched_from: 'res://main.tscn' });
+    expect(other.note).toMatch(/switched from res:\/\/main\.tscn/);
+    // Saving player.tscn makes Godot reload its instances in main.tscn when that tab becomes
+    // current again, and the reload used to clear main's unsaved state (Godot 4.7.2 bug).
+    json(await call('godot_scene_close', { save: true }));
+    let status = json(await call('godot_status', {}));
+    expect(status.editor.edited_scene).toBe('res://main.tscn');
+    expect(status.editor.unsaved_scenes).toContain('res://main.tscn');
+    // Same through a plain switch back (scene.open) after scene.save.
+    json(await call('godot_node_set', { scene: 'res://player.tscn', path: 'Sprite2D', properties: { visible: true } }));
+    json(await call('godot_scene_save', {}));
+    json(await call('godot_scene_open', { path: 'res://main.tscn' }));
+    status = json(await call('godot_status', {}));
+    expect(status.editor.unsaved_scenes).toContain('res://main.tscn');
+    json(await call('godot_scene_close', { path: 'res://player.tscn' }));
+    json(await call('godot_scene_close', { path: 'res://main.tscn', discard: true }));
   }, 120_000);
 
   it('scene.save_as retargets the tab in godot_status; scene.close then reports discarded changes', async () => {

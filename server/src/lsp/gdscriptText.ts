@@ -138,3 +138,159 @@ export function completionHint(text: string, line: number, character: number, to
   }
   return 'Godot offered no completion here. Point right after a partial identifier or a "." inside a function; a parse error earlier in the file also stops completion (see godot_code_diagnostics).';
 }
+
+// ---------------------------------------------------------------------------------------
+// Declaration details for code.symbols
+
+/**
+ * Repairs the `detail` Godot 4.7's language server gives a func, signal, var or const
+ * (textDocument/documentSymbol), using the script's own text. Two gaps, verified on 4.7.2
+ * (MCP_TEST_LOG Phase A, godot_code_symbols):
+ *   - a default value that is not a String is written as a quoted string of the Variant's
+ *     text form: `func take_hit(knockback: Vector2 = "(0.0, -180.0)")`,
+ *     `var tint: Color = "(1.0, 0.0, 0.0, 1.0)"` (for `Color.RED`). Such a default is
+ *     replaced by the expression written in the source (`Vector2(0, -180)`, `Color.RED`);
+ *   - signal parameters lose their types: `signal damaged(lives_left)` for
+ *     `signal damaged(lives_left: int)`, and the symbol has no parameter children to
+ *     recover them from. The parameter list is taken from the source.
+ * Everything else Godot reports is kept (inferred types such as `b := 2` -> `b: int = 2`,
+ * the return type). When the source doesn't line up with the detail (an unsaved edit, an
+ * odd layout), the detail comes back unchanged. `line` is the 0-based line of the name.
+ */
+export function fixDeclDetail(detail: string, kind: string, name: string, lines: string[], line: number): string {
+  if (!['func', 'signal', 'var', 'const'].includes(kind)) return detail;
+  const first = lines[line];
+  if (first === undefined) return detail;
+  const col = findIdentifier(first, name)[0];
+  if (col === undefined) return detail;
+  // The declaration from its name on, comments removed (a signature may span lines).
+  const src = stripComments([first.slice(col), ...lines.slice(line + 1, line + 40)].join('\n'));
+  let at = name.length;
+  while (at < src.length && /[ \t]/.test(src[at]!)) at++;
+
+  if (kind === 'signal' || kind === 'func') {
+    if (src[at] !== '(') return detail;
+    const srcParams = splitParams(src, at + 1, false);
+    if (!srcParams) return detail;
+    if (kind === 'signal') return `signal ${name}(${srcParams.parts.join(', ')})`;
+    const open = detail.indexOf('(', detail.indexOf(name));
+    const lspParams = open === -1 ? undefined : splitParams(detail, open + 1, true);
+    if (!lspParams || lspParams.parts.length !== srcParams.parts.length) return detail;
+    const fixed = lspParams.parts.map((p, i) => fixDefault(p, sourceDefault(srcParams.parts[i]!, true)));
+    return detail.slice(0, open + 1) + fixed.join(', ') + detail.slice(lspParams.end);
+  }
+  // var / const: `name [: Type] (= | :=) expr [: property block]`.
+  return fixDefault(detail, sourceDefault(src.slice(name.length), false));
+}
+
+/** Text with `#` comments removed (strings and line breaks kept). */
+function stripComments(text: string): string {
+  let out = '';
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (c === '#') {
+      while (i + 1 < text.length && text[i + 1] !== '\n') i++;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      const end = stringEnd(text, i);
+      out += text.slice(i, end);
+      i = end - 1;
+      continue;
+    }
+    out += c;
+  }
+  return out;
+}
+
+/** Index just after the string literal starting at `i` (triple quotes, escapes). */
+function stringEnd(text: string, i: number): number {
+  const c = text[i]!;
+  const quote = text.startsWith(c.repeat(3), i) ? c.repeat(3) : c;
+  for (let j = i + quote.length; j < text.length; j++) {
+    if (text[j] === '\\') {
+      j++;
+      continue;
+    }
+    if (text.startsWith(quote, j)) return j + quote.length;
+    // An unterminated one-quote string ends at the line end, as in GdMask.
+    if (quote.length === 1 && text[j] === '\n') return j;
+  }
+  return text.length;
+}
+
+/**
+ * Comma-separated items from just after an opening "(" up to its closing ")" (at `end`),
+ * whitespace collapsed, a trailing comma dropped. `detailText`: the text is a language
+ * server detail, where only "..." is a string (Godot writes every string default with
+ * double quotes, so an apostrophe there is just a character). Undefined when the
+ * parenthesis is never closed.
+ */
+function splitParams(text: string, from: number, detailText: boolean): { parts: string[]; end: number } | undefined {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = from;
+  const push = (end: number) => {
+    const p = text.slice(start, end).replace(/\s+/g, ' ').trim();
+    if (p) parts.push(p);
+  };
+  for (let i = from; i < text.length; i++) {
+    const c = text[i]!;
+    if (c === '"' || (c === "'" && !detailText)) {
+      i = stringEnd(text, i) - 1;
+    } else if (c === '(' || c === '[' || c === '{') {
+      depth++;
+    } else if (c === ')' || c === ']' || c === '}') {
+      if (depth === 0) {
+        push(i);
+        return { parts, end: i };
+      }
+      depth--;
+    } else if (c === ',' && depth === 0) {
+      push(i);
+      start = i + 1;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The default expression of a parameter (`a: int = 3`, `b := 2`), or of a var/const from
+ * just after its name, where it ends at a top-level ":" (a property block: `= 3:` or
+ * `= 3: set = f`) or the line end. Undefined when there is none.
+ */
+function sourceDefault(decl: string, param: boolean): string | undefined {
+  let depth = 0;
+  let eq = -1;
+  let end = decl.length;
+  for (let i = 0; i < decl.length; i++) {
+    const c = decl[i]!;
+    if (c === '"' || c === "'") {
+      i = stringEnd(decl, i) - 1;
+    } else if (c === '(' || c === '[' || c === '{') {
+      depth++;
+    } else if (c === ')' || c === ']' || c === '}') {
+      depth--;
+    } else if (depth === 0 && eq === -1 && c === '=') {
+      eq = i;
+    } else if (depth === 0 && !param && (c === '\n' || (c === ':' && eq !== -1))) {
+      // A var/const ends at the line end (outside brackets) or at its property block.
+      // Before the "=", a ":" is the type annotation (`x: int = 3`, `x := 3`).
+      end = i;
+      break;
+    }
+  }
+  if (eq === -1 || eq > end) return undefined;
+  return decl.slice(eq + 1, end).replace(/\s+/g, ' ').trim() || undefined;
+}
+
+/**
+ * When `lsp` ends in `= "..."` (Godot quoting a non-String default), use the source
+ * expression instead, unless that is itself a string literal ("x", 'x', &"x", ^"x", r"x"):
+ * then the quoted text is right.
+ */
+function fixDefault(lsp: string, source: string | undefined): string {
+  if (!source || /^[&^r]?["']/.test(source)) return lsp;
+  const m = /^([\s\S]*?\s=\s)"(?:[^"\\]|\\.)*"$/.exec(lsp);
+  return m ? m[1] + source : lsp;
+}

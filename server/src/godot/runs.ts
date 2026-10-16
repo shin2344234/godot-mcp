@@ -44,6 +44,36 @@ export interface OutputLine {
    * evaluate), not to the game's own code; it is shown as info and never counted.
    */
   evaluate?: boolean;
+  /**
+   * Engine start-up noise from the machine's drivers, not from the game (see isEnvSource):
+   * shown with an "ENV" tag and never counted as an error or warning.
+   */
+  env?: boolean;
+}
+
+/**
+ * Where Godot's own start-up complaints about the machine come from: graphics and audio
+ * drivers and the platform layer (e.g. "Required Vulkan instance extension VK_KHR_surface
+ * not found" from drivers/vulkan, ALSA's "status < 0" from drivers/alsa, "All audio drivers
+ * failed, falling back to the dummy driver" from servers/audio/audio_server.cpp). On a
+ * headless server or under Xvfb these appear on EVERY run, so the dogfood test saw
+ * run_start report errors: 3, warnings: 3 for a game without a single bug, and could never
+ * use "errors: 0" as a signal. Only reports raised before the runtime's hello (i.e. during
+ * engine start-up) and without a script on the stack are treated this way, so a game that
+ * triggers a driver error later still sees it counted.
+ */
+export function isEnvSource(file: string): boolean {
+  return /^(drivers|platform)\//.test(file) || file === 'servers/audio/audio_server.cpp';
+}
+
+/** The C++ file of an "   at: function (file:line)" continuation line, if it is one. */
+function atLineFile(text: string): string | undefined {
+  return /^\s+at:\s.*\(([^():]+):\d+\)\s*$/.exec(text)?.[1];
+}
+
+/** Third-party library chatter printed during start-up, e.g. "ALSA lib conf.c:5208:(...)". */
+function isEnvChatter(text: string): boolean {
+  return /^ALSA lib /.test(text);
 }
 
 /**
@@ -72,6 +102,8 @@ export interface RunError {
   stack: { file: string; function: string; line: number }[];
   /** Milliseconds since the game started, from Godot's timestamp. */
   time_ms: number;
+  /** Start-up noise from the machine's drivers (isEnvSource); not counted. */
+  env?: boolean;
 }
 
 /** Parses an "error" debugger message (DebuggerMarshalls::OutputError in Godot 4.7.2). */
@@ -145,6 +177,14 @@ export class GameRun {
   private evalTexts: { text: string; until: number }[] = [];
   /** Level of the current evaluate-output block (continuation lines inherit it). */
   private lastEval = false;
+  /**
+   * True once the runtime said hello: the engine has started, so driver complaints after
+   * this point are not start-up noise any more (see isEnvSource). Runs without the runtime
+   * never get here, which keeps their start-up noise tagged too.
+   */
+  private started = false;
+  /** Index in `lines` of the latest error/warning head line, to tag it env from its "at:". */
+  private lastHead = -1;
 
   constructor(
     private readonly child: ChildProcess,
@@ -154,9 +194,13 @@ export class GameRun {
   ) {
     if (session) {
       this.channel = new RuntimeChannel(new ProcessTransport(session));
+      void this.channel.ready.then(() => {
+        this.started = true;
+      });
       session.on('message:error', (m: GameMessage) => {
         const e = parseOutputError(m.data);
         if (!e) return;
+        if (!this.started && e.stack.length === 0 && isEnvSource(e.source.file)) e.env = true;
         // Raised by a debugger evaluate, not by the game: DebugState.evaluate reads it
         // itself (its own listener), the game's error list must not show it.
         if (this.evaluating > 0) {
@@ -249,18 +293,36 @@ export class GameRun {
     this.lastLevel = level;
     // Evaluate errors read as info (they're not the game's), tagged so they can be told apart.
     if (evaluate) level = 'info';
-    this.lines.push({ seq: this.seq++, stream, level, text, ...(head && !evaluate ? { head: true } : {}), ...(evaluate ? { evaluate: true } : {}) });
+    const line: OutputLine = { seq: this.seq++, stream, level, text, ...(head && !evaluate ? { head: true } : {}), ...(evaluate ? { evaluate: true } : {}) };
+    if (!this.started) {
+      if (head) {
+        this.lastHead = this.lines.length;
+      } else if (level !== 'info' && this.lastHead >= 0) {
+        // Godot prints the location on the line AFTER the "ERROR:"/"WARNING:" head, so the
+        // head is tagged once its "at:" line names a driver/platform file.
+        const file = atLineFile(text);
+        const headLine = this.lines[this.lastHead];
+        if (file && isEnvSource(file) && headLine) headLine.env = true;
+        if (headLine?.env) line.env = true;
+      } else if (isEnvChatter(text)) {
+        line.env = true;
+      }
+    }
+    if (!head && level === 'info') this.lastHead = -1;
+    this.lines.push(line);
     if (this.lines.length > MAX_LINES) {
       this.lines.shift();
       this.dropped++;
+      if (this.lastHead >= 0) this.lastHead--;
     }
   }
 
   /** Lines with seq >= since, optionally filtered by level. */
   read(since = 0, limit = 200, level: 'all' | 'error' | 'warning' = 'all') {
     let out = this.lines.filter((l) => l.seq >= since);
-    if (level === 'error') out = out.filter((l) => l.level === 'error');
-    else if (level === 'warning') out = out.filter((l) => l.level !== 'info');
+    // Start-up noise from the drivers is not an error of the game (isEnvSource).
+    if (level === 'error') out = out.filter((l) => l.level === 'error' && !l.env);
+    else if (level === 'warning') out = out.filter((l) => l.level !== 'info' && !l.env);
     const page = out.slice(0, limit);
     return {
       lines: page,
@@ -280,12 +342,15 @@ export class GameRun {
   counts() {
     let errors = 0;
     let warnings = 0;
+    let env = 0;
     for (const l of this.lines) {
       if (!l.head) continue;
-      if (l.level === 'error') errors++;
+      if (l.env) env++;
+      else if (l.level === 'error') errors++;
       else if (l.level === 'warning') warnings++;
     }
-    return { errors, warnings, lines: this.seq };
+    // environment: start-up noise from the machine's drivers (isEnvSource), not counted above.
+    return { errors, warnings, ...(env > 0 ? { environment: env } : {}), lines: this.seq };
   }
 
   stop(): void {
