@@ -26,6 +26,11 @@ Needs Godot 4.7 or newer (tested with 4.7.2).
 - **Scenes, nodes and signals**: read the tree, create, open, save, inherit and close
   scenes; add, set, remove, rename, reparent, duplicate, instance, find and move nodes;
   groups; signal connections; all-or-nothing batches as one undo step.
+  Removing, renaming or moving a node inherited from a base scene (or inside an instance
+  with Editable Children) is refused, since Godot would restore it on load. `node.set`
+  warns when an animation keys the property. The editor keeps a scene's unsaved state
+  when switching to a scene whose sub-scene was saved (a Godot bug otherwise drops it).
+  `scene.tree` counts an instance's hidden nodes and lists them when started there.
 - **Files** inside the project only (`res://` sandbox, symlink-aware): list, read,
   search, write, edit, move and delete, with automatic GDScript syntax checks.
 - **Resources and visual authoring**: `.tres` resources and dependencies, visual
@@ -43,15 +48,20 @@ Needs Godot 4.7 or newer (tested with 4.7.2).
 - **Code intelligence**: GDScript diagnostics, symbols, lookups and renames through
   Godot's language server (the editor's, or a private headless one).
 - **Offline docs**: search the class reference of the installed Godot version.
-- **Running the game**: start and stop runs, read output and errors with script stacks.
+- **Running the game**: start and stop runs, read output and errors with script stacks,
+  also for games started from the editor. Driver and audio start-up noise is tagged
+  `ENV` and kept out of the error counts.
 - **Live game tools**: live scene tree, read and edit nodes, input (keys, mouse, touch,
   actions), pause and frame stepping, input recording and replay, screenshots (also of
-  the editor's 2D/3D views), performance monitors and a script profiler.
+  the editor's 2D/3D views, which put the editor's main screen back afterwards),
+  performance monitors and a script profiler.
   `godot_game_eval` is off unless the server runs with `--allow-eval`.
 - **Debugging**: breakpoints, stepping, call stack, variables and expression evaluation
-  on games the server starts.
+  on games the server starts. `debug.state` opens object variables (`expand`) and can
+  wait for a stop; breakpoints on declaration lines and a `step_out` that leaves the
+  caller frame are explained.
 - **Test runs**: GUT 9.7.x and GdUnit4 6.2.x or newer, with per-test progress and
-  failures with file and line.
+  failures with file and line (GUT's values labeled "got ..., expected ...").
 - **Editor helpers**: editor log, launching the editor, Scene dock selection, opening a
   script at a line, saving everything, editor toasts.
 - **Runtime injection** through a temporary `override.cfg` that is removed once the game
