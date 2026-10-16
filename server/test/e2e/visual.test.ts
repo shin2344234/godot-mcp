@@ -161,6 +161,9 @@ describe.skipIf(!enabled)('visual (headless)', () => {
     json(await call('godot_node_add', { scene: 'res://ui/hud.tscn', parent: '.', type: 'Panel', name: 'Box', properties: { size: [100, 50] } }));
     const r = json(await call('godot_visual_layout', { scene: 'res://ui/hud.tscn', path: 'Box', preset: 'center', resize_mode: 'keep_size' }));
     expect(r).toMatchObject({ layout_mode: 'anchors', anchors: [0.5, 0.5, 0.5, 0.5], offsets: [-50, -25, 50, 25], grow: [2, 2], saved: true });
+    // The resulting size is reported (headless only on axes the anchors don't stretch).
+    expect(r.size).toEqual([100, 50]);
+    expect(r.previous_size).toBeUndefined();
     const full = json(
       await call('godot_visual_layout', { scene: 'res://ui/hud.tscn', path: 'Box', preset: 'Full Rect', margin: 8, size_flags: { horizontal: 'expand_fill' }, custom_minimum_size: [10, 20] }),
     );
@@ -175,9 +178,18 @@ describe.skipIf(!enabled)('visual (headless)', () => {
     json(await call('godot_node_add', { scene: 'res://ui/hud.tscn', parent: '.', type: 'Panel', name: 'Corner' }));
     const corner = json(await call('godot_visual_layout', { scene: 'res://ui/hud.tscn', path: 'Corner', preset: 'top_right', margin: 16, custom_minimum_size: [200, 30] }));
     expect(corner.offsets).toEqual([-216, 16, -16, 46]);
+    expect(corner).toMatchObject({ size: [200, 30], previous_size: [0, 0] });
     const mid = json(await call('godot_visual_layout', { scene: 'res://ui/hud.tscn', path: 'Corner', preset: 'center', custom_minimum_size: [120, 40] }));
     expect(mid.offsets).toEqual([-60, -20, 60, 20]);
   }, 120_000);
+
+  it('names the layout of a Control without a parent Control (under a CanvasLayer)', async () => {
+    // Godot calls this LAYOUT_MODE_UNCONTROLLED; anchors still apply, relative to the viewport.
+    json(await call('godot_scene_create', { path: 'res://ui/layer.tscn', root_type: 'CanvasLayer' }));
+    json(await call('godot_node_add', { scene: 'res://ui/layer.tscn', parent: '.', type: 'MarginContainer', name: 'Margin' }));
+    const r = json(await call('godot_visual_layout', { scene: 'res://ui/layer.tscn', path: 'Margin', preset: 'top_wide', margin: 10 }));
+    expect(r.layout_mode).toBe('anchors (to the viewport: no parent Control)');
+  }, 60_000);
 
   it('rejects layout on non-Controls and unknown presets', async () => {
     const n2d = errorText(await call('godot_visual_layout', { scene: 'res://main.tscn', path: '.', preset: 'center' }));

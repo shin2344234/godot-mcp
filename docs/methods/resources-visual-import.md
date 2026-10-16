@@ -218,7 +218,9 @@ params: `{ "scene"?, "path": "HUD/Panel", "preset"?: "full_rect", "resize_mode"?
   `left_wide`, `top_wide`, `right_wide`, `bottom_wide`, `vcenter_wide`, `hcenter_wide`,
   `full_rect`; spaces/dashes/`PRESET_` tolerated, did-you-mean) or its number.
   `resize_mode`: `minsize`, `keep_width`, `keep_height`, `keep_size`. Applied like the
-  inspector: `layout_mode` becomes Anchors (unless the node is a scene root/uncontrolled),
+  inspector: `layout_mode` becomes Anchors (unless the node has no parent Control: a scene
+  root or a child of a CanvasLayer/Node2D, which Godot calls "uncontrolled" and anchors to the
+  viewport; the result reports it as `"anchors (to the viewport: no parent Control)"`),
   then `set_anchors_and_offsets_preset(preset, resize_mode, margin)` and the matching grow
   directions. That call sizes the rect from the content minimum and ignores
   `custom_minimum_size`, which Godot applies later by growing the rect in the grow
@@ -232,7 +234,9 @@ params: `{ "scene"?, "path": "HUD/Panel", "preset"?: "full_rect", "resize_mode"?
   container positions the child); size flags and minimum size are allowed.
 * Editor: one undo step (anchors, offsets, grow, layout mode, flags, minimum size restored).
 
-Result: `{ "path", "layout_mode": "anchors", "anchors": [...], "offsets": [...], "grow": [h, v], "preset"?, "size_flags"?: [h, v], "custom_minimum_size"?, "warnings"?, "scene", "saved" }`.
+Result: `{ "path", "layout_mode": "anchors", "anchors": [...], "offsets": [...], "grow": [h, v], "preset"?, "size"?: [w, h], "previous_size"?: [w, h], "size_flags"?: [h, v], "custom_minimum_size"?, "warnings"?, "scene", "saved" }`.
+`size` is the rect Godot shows (in the editor; headless only when no axis is stretched by its
+anchors); `previous_size` appears when the call changed it.
 
 *Headless limitation:* outside a SceneTree a parent has no computed rect, so a Control
 stretched by its anchors has size 0 and `keep_*` presets keep that zero size (a warning

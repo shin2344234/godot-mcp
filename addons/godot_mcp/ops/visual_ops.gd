@@ -834,6 +834,9 @@ static func plan_layout(root: Node, params: Variant) -> Dictionary:
 			return mr
 		min_size = mr["value"]
 
+	# The rect before the change, so the result can say when the size changed (the dogfood
+	# test only noticed by comparing offsets that a top_wide preset shrank a bar 23 -> 20 px).
+	var size_before: Vector2 = _shown_size(ctl)
 	var cs := ChangeSet.new()
 	# Do: switch to anchor layout mode (what the inspector does when a preset is picked)
 	# unless the node is a scene root / under a non-Control parent ("uncontrolled").
@@ -882,13 +885,19 @@ static func plan_layout(root: Node, params: Variant) -> Dictionary:
 	var finish := func() -> Dictionary:
 		var out: Dictionary = {
 			"path": NodePaths.rel_path(root, ctl),
-			"layout_mode": ["position", "anchors", "container", "uncontrolled"][clampi(int(ctl.get("layout_mode")), 0, 3)],
+			"layout_mode": _layout_mode_name(ctl),
 			"anchors": [ctl.anchor_left, ctl.anchor_top, ctl.anchor_right, ctl.anchor_bottom],
 			"offsets": [ctl.offset_left, ctl.offset_top, ctl.offset_right, ctl.offset_bottom],
 			"grow": [ctl.grow_horizontal, ctl.grow_vertical],
 		}
 		if preset >= 0:
 			out["preset"] = PRESETS.find_key(preset)
+		# The resulting size, so callers don't have to work it out from anchors and offsets.
+		var size_after: Vector2 = _shown_size(ctl)
+		if size_after.x >= 0.0:
+			out["size"] = [size_after.x, size_after.y]
+			if size_before.x >= 0.0 and not size_before.is_equal_approx(size_after):
+				out["previous_size"] = [size_before.x, size_before.y]
 		if not flag_vals.is_empty():
 			out["size_flags"] = [ctl.size_flags_horizontal, ctl.size_flags_vertical]
 		if min_size != null:
@@ -900,6 +909,35 @@ static func plan_layout(root: Node, params: Variant) -> Dictionary:
 			out["warnings"] = ["The control's size is unknown outside the editor (its anchors stretch it), so '%s' kept a size of 0. Pass offsets explicitly, use resize_mode \"minsize\" with custom_minimum_size, or run this with the editor open." % resize_name]
 		return out
 	return {"changes": cs, "finish": finish}
+
+
+## The layout mode as the result reports it. Godot's LAYOUT_MODE_UNCONTROLLED (3) means the
+## control has no parent Control (a scene root, or a child of a CanvasLayer / Node2D); its
+## anchors then work relative to the viewport (Control::_get_layout_mode, and the anchors
+## branch of Control::_set_state treats UNCONTROLLED like ANCHORS; scene/gui/control.cpp,
+## 4.7.2). The dogfood test found the raw name "uncontrolled" confusing for a HUD under a
+## CanvasLayer, so it is reported as what it does.
+static func _layout_mode_name(ctl: Control) -> String:
+	match int(ctl.get("layout_mode")):
+		0:
+			return "position"
+		1:
+			return "anchors"
+		2:
+			return "container"
+		_:
+			return "anchors (to the viewport: no parent Control)"
+
+
+## The size the control is shown at, or (-1, -1) when it can't be known. In the editor the
+## control is in the tree and Godot computed its rect. Outside the tree (headless runner)
+## the size is only known on axes whose two anchors are equal: then it is the offset span.
+static func _shown_size(ctl: Control) -> Vector2:
+	if ctl.is_inside_tree():
+		return ctl.size
+	if is_equal_approx(ctl.anchor_left, ctl.anchor_right) and is_equal_approx(ctl.anchor_top, ctl.anchor_bottom):
+		return Vector2(ctl.offset_right - ctl.offset_left, ctl.offset_bottom - ctl.offset_top)
+	return Vector2(-1, -1)
 
 
 ## Offsets [left, top, right, bottom] after applying `preset` and growing the rect to
