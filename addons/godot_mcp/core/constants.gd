@@ -11,7 +11,7 @@ extends RefCounted
 const PROTOCOL_VERSION: int = 1
 
 ## Must match plugin.cfg's `version`. Reported in the session file, `welcome` and `editor.status`.
-const PLUGIN_VERSION: String = "0.1.1"
+const PLUGIN_VERSION: String = "0.1.2"
 
 ## Project setting holding the preferred bridge port, and its default.
 const PORT_SETTING: String = "godot_mcp/bridge/port"

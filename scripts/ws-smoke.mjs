@@ -24,6 +24,10 @@ if (typeof WebSocket === "undefined") {
 
 const session = JSON.parse(readFileSync(join(projectDir, ".godot/godot_mcp/session.json"), "utf8"));
 const url = `ws://127.0.0.1:${session.port}`;
+// The version the running addon should report: its plugin.cfg, which check-versions.mjs
+// keeps equal to core/constants.gd PLUGIN_VERSION. Read, not hardcoded, so a release bump
+// doesn't break this smoke test.
+const pluginVersion = /^\s*version\s*=\s*"([^"]+)"/m.exec(readFileSync(join(projectDir, "addons/godot_mcp/plugin.cfg"), "utf8"))?.[1];
 let failures = 0;
 
 function check(cond, label, detail) {
@@ -111,7 +115,7 @@ async function main() {
 
   // 4. Proper session.
   const s = await connect();
-  s.ws.send(JSON.stringify({ type: "hello", protocol: 1, token: session.token, client: "godot-mcp-server", client_version: "0.1.0" }));
+  s.ws.send(JSON.stringify({ type: "hello", protocol: 1, token: session.token, client: "godot-mcp-server", client_version: pluginVersion }));
   const welcome = await nextFrame(s);
   check(welcome && welcome.type === "welcome" && welcome.protocol === 1, "hello -> welcome", welcome);
   check(welcome && welcome.godot_version === session.godot_version, "welcome.godot_version matches session file", welcome);
@@ -127,7 +131,7 @@ async function main() {
   s2.ws.close();
 
   const status = await call(s, "editor.status");
-  check(status.result && status.result.plugin_version === "0.1.0", "editor.status", status);
+  check(status.result && status.result.plugin_version === pluginVersion, `editor.status reports plugin ${pluginVersion}`, status);
   check(status.result && typeof status.result.is_playing === "boolean", "editor.status.is_playing is boolean", status);
 
   const unknown = await call(s, "node.ad", {});

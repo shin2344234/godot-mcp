@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-16
+
+### Fixed
+
+- **The addon reported its version as 0.1.0 in 0.1.1.** `PLUGIN_VERSION` in
+  `addons/godot_mcp/core/constants.gd` was not bumped with the rest, so the editor bridge's
+  welcome message, `godot_status`, the session file and the server's "Connected to Godot
+  editor" log showed 0.1.0. Nothing compared it, and `godot-mcp init` reads `plugin.cfg`,
+  so this was a wrong label only. The release version check now covers that file too.
+
 ## [0.1.1] - 2026-10-16
 
 Fixes for the bugs a code review of 0.1.0 found and reproduced.
@@ -121,6 +131,7 @@ Needs Godot 4.7 or newer (tested with 4.7.2).
   `--dry-run` previews, `--remove` undoes.
 - **Docs**: a short README with install steps; under `docs/`, per-client setup, the full tool list, how it works, troubleshooting, protocol designs and per-area method references.
 
-[unreleased]: https://github.com/shin2344234/godot-mcp/compare/v0.1.1...HEAD
+[unreleased]: https://github.com/shin2344234/godot-mcp/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/shin2344234/godot-mcp/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/shin2344234/godot-mcp/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/shin2344234/godot-mcp/releases/tag/v0.1.0

@@ -3,7 +3,7 @@
   "name": "io.github.shin2344234/godot-mcp",
   "title": "Godot MCP",
   "description": "Edit Godot 4 scenes, nodes and scripts; run, test and debug games live in the editor or headless.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "websiteUrl": "https://github.com/shin2344234/godot-mcp#readme",
   "repository": {
     "url": "https://github.com/shin2344234/godot-mcp",
@@ -16,7 +16,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@shin2344234/godot-mcp",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
