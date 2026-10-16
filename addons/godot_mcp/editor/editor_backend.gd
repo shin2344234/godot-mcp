@@ -246,7 +246,10 @@ func _mutate(method: String, planner: Callable, params: Dictionary) -> Dictionar
 	# Editor edits live in memory until saved; say so, so the caller remembers scene.save.
 	result["saved"] = false
 	if not switched_note.is_empty():
-		result["switched_from"] = before.scene_file_path if is_instance_valid(before) else null
+		# Not a ternary: String vs null trips the lint's INCOMPATIBLE_TERNARY warning.
+		result["switched_from"] = null
+		if is_instance_valid(before):
+			result["switched_from"] = before.scene_file_path
 		result["note"] = (str(result["note"]) + " " + switched_note) if result.has("note") else switched_note
 	return R.ok(result)
 
