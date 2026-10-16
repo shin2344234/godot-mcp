@@ -154,6 +154,13 @@ static func input_run(rt: Node, params: Dictionary) -> Dictionary:
 		"frames": Engine.get_process_frames() - start_frame,
 		"viewport": _vec(tree.root.get_visible_rect().size),
 	}
+	# With a stretch mode (display/window/stretch/mode) the game's coordinates, which `at`
+	# uses, are not window pixels: a 640x360 game in a 1280x720 window. Screenshots are
+	# captured at window resolution (canvas_items stretch), so `region` and screenshot sizes
+	# are in window pixels; say so here once, next to `viewport`, when the two differ.
+	var window := Vector2(tree.root.size)
+	if not window.is_equal_approx(tree.root.get_visible_rect().size):
+		result["window"] = _vec(window)
 	if suspended:
 		# Machine-readable twin of the warning: nothing reached the game.
 		result["discarded"] = true
@@ -264,8 +271,14 @@ static func _run_step(rt: Node, st: Dictionary) -> Dictionary:
 				for m: int in mods:
 					held |= _mask_of(m)
 					_send(_key_event(m | held, true, false))
-				_send(_key_event(code, true, true))
-				res["handled"] = root.is_input_handled()
+				var down: InputEventKey = _key_event(code, true, true)
+				_send(down)
+				_put_consumed(root, res)
+				# Which input actions this key triggers (InputMap.event_is_action), so the
+				# result confirms the binding the game polls ("Right" -> move_right, ui_right).
+				var acts: Array = _actions_of(down)
+				if not acts.is_empty():
+					res["actions"] = acts
 			if phase == "tap":
 				await _hold(rt, ms)
 			if phase != "press":
@@ -286,7 +299,7 @@ static func _run_step(rt: Node, st: Dictionary) -> Dictionary:
 				ev.pressed = true
 				ev.strength = clampf(float(st.get("value", 1.0)), 0.0, 1.0)
 				_send(ev)
-				res["handled"] = root.is_input_handled()
+				_put_consumed(root, res)
 				res["pressed"] = Input.is_action_pressed(action)
 			if phase == "tap":
 				await _hold(rt, ms)
@@ -304,6 +317,7 @@ static func _run_step(rt: Node, st: Dictionary) -> Dictionary:
 			res["at"] = _vec(p["value"])
 			_add_target(res, p)
 			res["hovered"] = _path_or_null(rt, root.gui_get_hovered_control())
+			_put_physics(rt, root, p["value"], res)
 			_check_pointer(root, p["value"], res)
 
 		"click":
@@ -317,27 +331,47 @@ static func _run_step(rt: Node, st: Dictionary) -> Dictionary:
 			# Hover first (mouse_entered, hover state), then press on the next frame like a user.
 			_move_to(root, pos, Input.get_mouse_button_mask())
 			await tree.process_frame
+			# Physics objects under the pointer, looked up BEFORE the click: a click can free
+			# what it hits (a coin collected on click, a "Restart" button reloading the scene).
+			_put_physics(rt, root, pos, res)
+			# The hovered Control before the press, as a fallback for `hit`: Viewport can drop
+			# its hover state with a deferred call (Viewport._drop_mouse_over while enter/exit
+			# notifications are being sent), and in the e2e test a click right after the
+			# headless resize then read gui_get_hovered_control() == null although the press
+			# reached the button.
+			var hovered_before: Control = root.gui_get_hovered_control()
 			var double: bool = bool(st.get("double", false))
-			var hit: Control = null
+			# Everything about the hit Control is captured right after the press is delivered,
+			# as plain strings/bools: when the click reloads the scene (a "Play again" button),
+			# the Control is freed during the hold/release below, and reading its path
+			# afterwards gave "" (the old report showed hit: "").
+			var hit_path: Variant = null
+			var hit_target: Variant = null
 			var handled: bool = false
 			for n: int in (2 if double else 1):
 				if phase != "release":
 					_send(_mouse_button(root, pos, button, true, n == 1))
 					if n == 0:
-						hit = root.gui_get_hovered_control()
+						var hit: Control = root.gui_get_hovered_control()
+						if hit == null and is_instance_valid(hovered_before):
+							hit = hovered_before
 						handled = root.is_input_handled()
+						hit_path = _path_or_null(rt, hit)
+						if p.has("node") and hit != null:
+							var target: Node = p["node"]
+							hit_target = hit == target or target.is_ancestor_of(hit)
 				if phase == "tap":
 					await _hold(rt, ms)
 				if phase != "press":
 					_send(_mouse_button(root, pos, button, false, false))
 				if double and n == 0:
 					await tree.process_frame
-			res["hit"] = _path_or_null(rt, hit)
-			res["handled"] = handled
+			res["hit"] = hit_path
+			if handled:
+				res["handled"] = true
+			if hit_target != null:
+				res["hit_target"] = hit_target
 			_check_pointer(root, pos, res)
-			if p.has("node") and hit != null:
-				var target: Node = p["node"]
-				res["hit_target"] = hit == target or target.is_ancestor_of(hit)
 
 		"drag":
 			var a: Dictionary = _resolve_pos(rt, st["at"])
@@ -411,8 +445,12 @@ static func _run_step(rt: Node, st: Dictionary) -> Dictionary:
 			var jb: int = st["_button"]
 			res["button"] = st["button"]
 			if phase != "release":
-				_send(_joy_button(device, jb, true))
-				res["handled"] = root.is_input_handled()
+				var jdown: InputEventJoypadButton = _joy_button(device, jb, true)
+				_send(jdown)
+				_put_consumed(root, res)
+				var jacts: Array = _actions_of(jdown)
+				if not jacts.is_empty():
+					res["actions"] = jacts
 			if phase == "tap":
 				await _hold(rt, ms)
 			if phase != "press":
@@ -710,6 +748,89 @@ static func _resolve_pos(rt: Node, at: Variant) -> Dictionary:
 	return out
 
 
+## `handled: true` when a node marked the event as handled (the GUI consumed it, or a script
+## called get_viewport().set_input_as_handled()). Only ever reported when true: games that
+## poll Input (Input.is_action_pressed in _physics_process) never mark events, so the old
+## `handled: false` on every key/action step read like a failure although the game reacted.
+static func _put_consumed(root: Window, res: Dictionary) -> void:
+	if root.is_input_handled():
+		res["handled"] = true
+
+
+## InputMap actions an event triggers (project actions first, then the built-in ui_* ones).
+## Non-exact matching (extra modifiers allowed), the way Input matches events to actions.
+static func _actions_of(ev: InputEvent) -> Array:
+	var own: Array = []
+	var ui: Array = []
+	for a: StringName in InputMap.get_actions():
+		if InputMap.event_is_action(ev, a):
+			(ui if String(a).begins_with("ui_") else own).append(String(a))
+	own.sort()
+	ui.sort()
+	return own + ui
+
+
+## Most physics objects listed per pointer position (the top ones are what matter).
+const MAX_PHYSICS_HITS: int = 4
+
+
+## Adds `physics`: the CollisionObject2D/3D nodes under a viewport position, because
+## `hit`/`hovered` only report Controls (Viewport.gui_get_hovered_control) and a click on a
+## crate or a coin otherwise said nothing at all. Omitted when there is none.
+##   2D: like Viewport's own physics picking (scene/main/viewport.cpp, _process_picking): the
+##   position goes through the inverse canvas transform (Camera2D zoom/offset) into world
+##   coordinates and PhysicsDirectSpaceState2D.intersect_point() is asked, once for the
+##   viewport's own canvas (canvas_instance_id 0) and once per CanvasLayer with that layer's
+##   transform: the physics server only matches objects whose canvas id equals the query's
+##   (modules/godot_physics_2d/godot_space_2d.cpp). Bodies AND areas are reported,
+##   input_pickable or not (pick_point false): this is "what is there", not "who gets
+##   input_event".
+##   3D: a ray from the current Camera3D through the position (project_ray_origin/normal,
+##   up to camera.far), first collider only.
+## Queries run outside the physics step; Godot allows that on the main thread (the space is
+## only locked while it steps) and they see the positions of the last physics tick.
+static func _put_physics(rt: Node, root: Window, pos: Vector2, res: Dictionary) -> void:
+	var found: Array = []
+	var world2d: World2D = root.find_world_2d()
+	if world2d != null:
+		var space: PhysicsDirectSpaceState2D = world2d.direct_space_state
+		if space != null:
+			var layers: Array = [null]
+			layers.append_array(root.find_children("*", "CanvasLayer", true, false))
+			for layer: Variant in layers:
+				var xform: Transform2D = root.get_canvas_transform()
+				var q := PhysicsPointQueryParameters2D.new()
+				if layer != null:
+					var cl: CanvasLayer = layer
+					# A CanvasLayer with a custom_viewport draws elsewhere; skip it.
+					if cl.get_viewport() != root or cl.custom_viewport != null:
+						continue
+					xform = cl.get_final_transform()
+					q.canvas_instance_id = cl.get_instance_id()
+				q.position = xform.affine_inverse() * pos
+				q.collide_with_areas = true
+				q.collide_with_bodies = true
+				for hit: Dictionary in space.intersect_point(q, MAX_PHYSICS_HITS):
+					var obj: Object = hit.get("collider")
+					if obj is Node and not found.has(obj) and obj != rt:
+						found.append(obj)
+	var cam: Camera3D = root.get_camera_3d()
+	var world3d: World3D = root.find_world_3d()
+	if cam != null and world3d != null and world3d.direct_space_state != null:
+		var from: Vector3 = cam.project_ray_origin(pos)
+		var rq := PhysicsRayQueryParameters3D.create(from, from + cam.project_ray_normal(pos) * cam.far)
+		rq.collide_with_areas = true
+		var hit3: Dictionary = world3d.direct_space_state.intersect_ray(rq)
+		if hit3.get("collider") is Node:
+			found.append(hit3["collider"])
+	if found.is_empty():
+		return
+	var paths: Array = []
+	for n: Node in found.slice(0, MAX_PHYSICS_HITS):
+		paths.append(rt.path_of(n))
+	res["physics"] = paths
+
+
 static func _add_target(res: Dictionary, p: Dictionary) -> void:
 	if p.has("note"):
 		res["note"] = p["note"]
@@ -781,24 +902,82 @@ static func time_state(rt: Node, _params: Dictionary) -> Dictionary:
 	})
 
 
-## Called right after the server sent "scene:next_frame": Godot's SceneDebugger has just
-## un-suspended the tree and will re-suspend it on RenderingServer.frame_post_draw. A
-## headless game never draws (DisplayServerHeadless.can_any_window_draw() is false, so
-## Main::iteration skips RenderingServer.draw), so we add a helper that runs last in the
-## next frame's _process and forces one draw, which emits frame_post_draw. Returns once the
-## game is suspended again.
-static func time_step_wait(rt: Node, _params: Dictionary) -> Dictionary:
+## One step of a suspended game. The server sends this request first and Godot's
+## "scene:next_frame" right after it; SceneDebugger then un-suspends the tree and
+## re-suspends it on RenderingServer.frame_post_draw, i.e. after exactly one main-loop
+## iteration. The two usually land in the same debugger poll, this one first, but not
+## always: in the e2e tests this request sometimes started when the game had already been
+## un-suspended (next_frame handled before it). So nothing here depends on the order:
+## frames and ticks are counted by signal callbacks that only count while the tree is not
+## suspended, and the coroutine just waits for "un-suspended, then suspended again".
+##
+## What one iteration runs (Main::iteration, main/main.cpp 4.7.2): first 0..N physics
+## ticks, how many depending on the real time since the previous iteration (the main loop
+## keeps iterating while suspended; only the nodes stop), then one process frame, then the
+## draw. Under a slow renderer (llvmpipe, ~30 fps) that is ~2 physics ticks per frame at 60
+## ticks/s, which is why stepping by frames could never step a single physics tick.
+##
+## params.ticks = true (godot_game_time step physics_ticks): the iteration runs at most ONE
+## physics tick: Engine.max_physics_steps_per_frame is set to 1 for it (Main::iteration
+## reads it at the start of every iteration, clamps the tick count to it and shortens the
+## process delta to match). An iteration can also run zero ticks when frames are faster
+## than ticks (a headless game runs uncapped), so Engine.max_fps is capped to the tick rate
+## meanwhile (fewer empty iterations), and the server repeats steps until the wanted number
+## of ticks has run. Both settings are restored before this returns, while the game is
+## suspended again, so the game never runs with them.
+##
+## A headless game never draws (DisplayServerHeadless.can_any_window_draw() is false, so
+## Main::iteration skips RenderingServer.draw) and would never be re-suspended, so there we
+## add a helper that runs last in the stepped frame's _process and forces one draw, which
+## emits frame_post_draw. Suspended nodes don't process (Node.can_process() is false while
+## the SceneTree is suspended, whatever the process_mode), so whether it is added before or
+## after the un-suspend, it first runs in the stepped frame.
+##
+## Returns what the step really ran: {"frames": process frames, "physics_ticks": physics
+## ticks} in which nodes were processed. (Engine.get_process_frames() and
+## get_physics_frames() can't tell: the engine keeps counting while suspended.)
+static func time_step_wait(rt: Node, params: Dictionary) -> Dictionary:
 	var tree: SceneTree = rt.get_tree()
-	var start: int = Engine.get_process_frames()
-	if rt.can_process() and DisplayServer.get_name() == "headless":
+	var one_tick: bool = bool(params.get("ticks", false))
+	# SceneTree.physics_frame / process_frame are emitted for every tick / frame, suspended
+	# or not; one counts only when nodes were processed in it (this PROCESS_MODE_ALWAYS
+	# node can process exactly when the tree is not suspended).
+	var counts: Dictionary = {"ticks": 0, "frames": 0}
+	var on_tick := func() -> void:
+		if rt.can_process():
+			counts["ticks"] += 1
+	var on_frame := func() -> void:
+		if rt.can_process():
+			counts["frames"] += 1
+	tree.physics_frame.connect(on_tick)
+	tree.process_frame.connect(on_frame)
+	var saved_steps: int = Engine.max_physics_steps_per_frame
+	var saved_fps: int = Engine.max_fps
+	if one_tick:
+		Engine.max_physics_steps_per_frame = 1
+		if Engine.max_fps == 0 or Engine.max_fps > Engine.physics_ticks_per_second:
+			Engine.max_fps = Engine.physics_ticks_per_second
+	if DisplayServer.get_name() == "headless":
 		rt.add_child(_StepEnd.new(), false, Node.INTERNAL_MODE_BACK)
+	# Phase 1: wait for the un-suspend (process_frame keeps being emitted while suspended).
+	var deadline: int = Time.get_ticks_msec() + 3000
+	while not rt.can_process() and Time.get_ticks_msec() < deadline:
+		await tree.process_frame
+	var resumed: bool = rt.can_process()
+	# Phase 2: wait until SceneDebugger has suspended the game again.
 	var guard: int = 0
 	while rt.can_process() and guard < 60:
-		await tree.process_frame
 		guard += 1
+		await tree.process_frame
+	tree.physics_frame.disconnect(on_tick)
+	tree.process_frame.disconnect(on_frame)
+	Engine.max_physics_steps_per_frame = saved_steps
+	Engine.max_fps = saved_fps
+	if not resumed:
+		return R.err(R.GODOT_ERROR, "The game did not run the stepped frame (Godot's scene:next_frame had no effect within 3 s). Check that it is still paused (godot_game_time state).")
 	if rt.can_process():
 		return R.err(R.GODOT_ERROR, "The game did not pause again after stepping a frame (it may not be drawing frames, e.g. a minimized window). It is running now; pause it again with action \"pause\".")
-	return R.ok({"frames": Engine.get_process_frames() - start})
+	return R.ok({"frames": counts["frames"], "physics_ticks": counts["ticks"]})
 
 
 ## Runs last in the frame after a step (highest process_priority) and forces a draw so
@@ -848,10 +1027,16 @@ static func time_wait_for(rt: Node, params: Dictionary) -> Dictionary:
 				state["fired"] = true
 				state["args"] = args
 		emitter.connect(sig, cb)
-		while not state["fired"] and Time.get_ticks_msec() < deadline:
+		var emitter_path: String = rt.path_of(emitter)
+		while not state["fired"] and Time.get_ticks_msec() < deadline and is_instance_valid(emitter):
 			await tree.process_frame
 		if is_instance_valid(emitter) and emitter.is_connected(sig, cb):
 			emitter.disconnect(sig, cb)
+		if not state["fired"] and not is_instance_valid(emitter):
+			# The emitter was freed (queue_free, scene change) before emitting: the signal
+			# can't come any more. That is an outcome the agent waits for as often as the
+			# signal itself (an enemy despawning), so it is a result, not an error.
+			return R.ok({"freed": true, "node": emitter_path, "elapsed_ms": Time.get_ticks_msec() - start_ms, "frames": Engine.get_process_frames() - start_frame})
 		if not state["fired"]:
 			return _timeout(rt, "signal '%s' of '%s' was not emitted" % [sig, node_path if node_path != "" else "."], timeout_ms)
 		out["args"] = rt.encode(state["args"])
@@ -859,21 +1044,30 @@ static func time_wait_for(rt: Node, params: Dictionary) -> Dictionary:
 	elif params.has("condition"):
 		var expr := Expression.new()
 		var text: String = str(params["condition"])
-		if expr.parse(text) != OK:
+		# Autoloads and engine singletons named in the condition are passed as Expression
+		# inputs (an Expression can't see globals by itself; see rt.expression_globals).
+		var globals: Array = rt.expression_globals(text, {})
+		if expr.parse(text, globals[0]) != OK:
 			return R.err(R.BAD_PARAMS, "condition does not parse: %s. Example: \"get_node('Player').position.x > 300\" (evaluated on the base node, default the current scene)." % expr.get_error_text())
 		var found: Dictionary = rt.find_node(node_path if node_path != "" else ".")
 		if R.is_err(found):
 			return found
 		var base: Node = found["value"]
+		var base_path: String = rt.path_of(base)
 		var last_error: String = ""
 		var first: bool = true
 		var value: Variant = null
 		while true:
 			if not is_instance_valid(base):
-				return R.err(R.NOT_FOUND, "The condition's base node was freed while waiting.")
+				# The base node was freed while waiting (an enemy that queue_free()s itself
+				# while its "_dying" flag is being watched). The condition can never become
+				# true any more; that is an answer, so report it as a result.
+				out["freed"] = true
+				out["node"] = base_path
+				break
 			# const_calls_only = true: a condition may read properties and call const
 			# methods (get_node, is_visible...), never change the game.
-			value = expr.execute([], base, false, true)
+			value = expr.execute(globals[1], base, false, true)
 			if expr.has_execute_failed():
 				last_error = expr.get_error_text()
 				if first:

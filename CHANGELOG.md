@@ -52,9 +52,10 @@ Needs Godot 4.7 or newer (tested with 4.7.2).
   also for games started from the editor. Driver and audio start-up noise is tagged
   `ENV` and kept out of the error counts.
 - **Live game tools**: live scene tree, read and edit nodes, input (keys, mouse, touch,
-  actions), pause and frame stepping, input recording and replay, screenshots (also of
-  the editor's 2D/3D views, which put the editor's main screen back afterwards),
-  performance monitors and a script profiler.
+  actions; clicks report the Control and physics object hit), pause and stepping by
+  frames or exact physics ticks, input recording and replay, screenshots (of the window,
+  a node framed on screen, or the editor's 2D/3D views, which put the editor's main
+  screen back afterwards), performance monitors and a script profiler.
   `godot_game_eval` is off unless the server runs with `--allow-eval`.
 - **Debugging**: breakpoints, stepping, call stack, variables and expression evaluation
   on games the server starts. `debug.state` opens object variables (`expand`) and can
